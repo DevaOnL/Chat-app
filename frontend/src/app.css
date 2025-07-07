@@ -1,0 +1,20 @@
+:root {
+  --bg: #fff;
+  --fg: #000;
+  /* fallback/default values */
+}
+
+body {
+  background-color: var(--bg);
+  color: var(--fg);
+  transition: all 0.3s ease;
+}
+
+button {
+  background-color: var(--dark-gray);
+  color: var(--fg);
+  border: none;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+}
+/*ohh

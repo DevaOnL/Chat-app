@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { themes, Theme } from "./frontend/themes";
-import { applyTheme } from "../../backend/index";
+import { themes, Theme } from "./themes";
+import { applyTheme } from "./themeUtils";
 
 const ThemeToggle: React.FC = () => {
   const saved = localStorage.getItem("selectedTheme") || "Gruvbox";
@@ -12,7 +12,10 @@ const ThemeToggle: React.FC = () => {
 
   return (
     <div style={{ padding: "0.5rem" }}>
-      <label htmlFor="theme-select" style={{ color: "var(--fg)", marginRight: "0.5rem" }}>
+      <label
+        htmlFor="theme-select"
+        style={{ color: "var(--fg)", marginRight: "0.5rem" }}
+      >
         Theme:
       </label>
       <select
@@ -24,7 +27,7 @@ const ThemeToggle: React.FC = () => {
           color: "var(--fg)",
           border: "1px solid var(--light-gray)",
           padding: "0.3rem 0.5rem",
-          borderRadius: "4px"
+          borderRadius: "4px",
         }}
       >
         {themes.map((theme: Theme) => (
@@ -38,3 +41,4 @@ const ThemeToggle: React.FC = () => {
 };
 
 export default ThemeToggle;
+//ohhh
