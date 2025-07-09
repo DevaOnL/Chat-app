@@ -1,21 +1,4 @@
-export type Theme = {
-  name: string;
-  values: Record<string, string>;
-};
-
-export const themes: Theme[] = [
-  {
-    name: "Gruvbox",
-    values: {
-      "--bg": "#282828",
-      "--fg": "#ebdbb2",
-      "--dark-gray": "#3c3836",
-      "--light-gray": "#a89984",
-      "--yellow": "#d79921",
-      "--green": "#b8bb26",
-      "--blue": "#83a598",
-      "--red": "#fb4934",
-      "--orange": "#fe8019",
-    }
-  },
-];
+export const themes = {
+  light: { bg:"#f8fafc", fg:"#000", panel:"#ffffff", panelAlt:"#f1f5f9" },
+  dark : { bg:"#0f172a", fg:"#e2e8f0", panel:"#1e293b", panelAlt:"#334155" },
+} as const;

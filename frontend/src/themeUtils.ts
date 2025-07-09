@@ -1,14 +1,15 @@
-import { themes, Theme } from "./themes";
+import { themes } from "./themes";
 
-export const applyTheme = (themeName: string): void => {
-  const theme: Theme | undefined = themes.find(t => t.name === themeName);
-  if (!theme) return;
+export type Theme = keyof typeof themes;
 
-  const root = document.documentElement;
-  Object.entries(theme.values).forEach(([key, value]) => {
-    root.style.setProperty(key, value);
+export const applyTheme = (name: Theme) => {
+  const theme = themes[name];
+  Object.entries(theme).forEach(([key,val])=>{
+    document.documentElement.style.setProperty(`--${key}`, val as string);
   });
-
-  localStorage.setItem("selectedTheme", themeName);
+  localStorage.setItem("theme", name);
 };
-// ohh
+
+export const getInitialTheme = (): Theme => {
+  return (localStorage.getItem("theme") as Theme) || "light";
+};

@@ -1,44 +1,20 @@
-import React, { useState, useEffect } from "react";
-import { themes, Theme } from "./themes";
-import { applyTheme } from "./themeUtils";
+import React, { useState } from "react";
+import { applyTheme, getInitialTheme } from "./themeUtils";
 
 const ThemeToggle: React.FC = () => {
-  const saved = localStorage.getItem("selectedTheme") || "Gruvbox";
-  const [themeName, setThemeName] = useState<string>(saved);
+  const [theme, setTheme] = useState<string>(getInitialTheme());
 
-  useEffect(() => {
-    applyTheme(themeName);
-  }, [themeName]);
+  const toggle = () => {
+    const next = theme === "light" ? "dark" : "light";
+    applyTheme(next);
+    setTheme(next);
+  };
 
   return (
-    <div style={{ padding: "0.5rem" }}>
-      <label
-        htmlFor="theme-select"
-        style={{ color: "var(--fg)", marginRight: "0.5rem" }}
-      >
-        Theme:
-      </label>
-      <select
-        id="theme-select"
-        value={themeName}
-        onChange={(e) => setThemeName(e.target.value)}
-        style={{
-          backgroundColor: "var(--bg)",
-          color: "var(--fg)",
-          border: "1px solid var(--light-gray)",
-          padding: "0.3rem 0.5rem",
-          borderRadius: "4px",
-        }}
-      >
-        {themes.map((theme: Theme) => (
-          <option key={theme.name} value={theme.name}>
-            {theme.name}
-          </option>
-        ))}
-      </select>
-    </div>
+    <button onClick={toggle} className="border px-3 py-1 rounded">
+      {theme === "light" ? "🌙 Dark" : "☀️ Light"}
+    </button>
   );
 };
 
 export default ThemeToggle;
-//ohhh
