@@ -66,17 +66,9 @@ npm run dev
 
 If you see import-related errors (e.g., uuid not found), you may need to install missing packages inside the appropriate folder. Example:
 ```bash
-cd frontend
+cd backend
 npm install uuid
 ```
-
-⸻
-
-✅ Summary
-	•	Install dependencies in both frontend/ and backend/.
-	•	Tailwind CSS setup is needed in frontend/.
-	•	Run npm run build in frontend/, then npm run dev in backend/.
-
 ⸻
 
 ✨ Optional
