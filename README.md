@@ -6,7 +6,7 @@ This guide will walk you through installing dependencies and running the chat ap
 
 - [Node.js](https://nodejs.org/) (v16+ recommended)
 - npm (comes with Node.js)
-- VSCode with Tailwind CSS IntelliSense Extension (optional but recommended)
+- VSCode with [Tailwind CSS IntelliSense Extension](https://marketplace.visualstudio.com/items?itemName=bradlc.vscode-tailwindcss) (optional but recommended)
 
 ---
 
