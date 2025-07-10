@@ -1,14 +1,18 @@
-/* Tailwind layers (already present) */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-/* Theme variables */
-:root { --bg:#fff; --fg:#000; --panel:#ffffff; --panel-alt:#f5f5f5; }
-body  { background-color:var(--bg); color:var(--fg);
-        transition:background-color .3s,color .3s; }
-
-/* Extra utilities so Tailwind won't purge them */
-.bg-panel      { background-color:var(--panel); }
-.bg-panel-alt  { background-color:var(--panel-alt); }
-.text-fg       { color:var(--fg); }
+/* ===== custom utilities powered by CSS variables ===== */
+:root { --bg:#fff; --fg:#000; }
+/* body + default text */
+body        { background-color:var(--bg); color:var(--fg); transition:background-color .3s,color .3s; }
+/* panels */
+.bg-panel   { background-color:var(--panel); }
+.bg-panelAlt{ background-color:var(--panelAlt); }
+/* header + borders */
+.bg-header  { background-color:var(--header); }
+.border-border{ border-color:var(--border); }
+/* accent */
+.bg-accent  { background-color:var(--accent); }
+.text-accentFore { color:var(--accentFore); }
+.text-fg    { color:var(--fg); }      /* generic text when needed */

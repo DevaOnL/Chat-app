@@ -1,15 +1,16 @@
-import { themes } from "./themes";
+/* src/themeUtils.ts */
+import { themes, ThemeName } from "./themes";
 
-export type Theme = keyof typeof themes;
+export const applyTheme = (name: ThemeName) => {
+  const root = document.documentElement;
+  const palette = themes[name];
 
-export const applyTheme = (name: Theme) => {
-  const theme = themes[name];
-  Object.entries(theme).forEach(([key,val])=>{
-    document.documentElement.style.setProperty(`--${key}`, val as string);
+  Object.entries(palette).forEach(([key, value]) => {
+    root.style.setProperty(`--${key}`, value);
   });
+
   localStorage.setItem("theme", name);
 };
 
-export const getInitialTheme = (): Theme => {
-  return (localStorage.getItem("theme") as Theme) || "light";
-};
+export const getInitialTheme = (): ThemeName =>
+  (localStorage.getItem("theme") as ThemeName) || "light";

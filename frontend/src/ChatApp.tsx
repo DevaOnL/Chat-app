@@ -5,128 +5,127 @@ interface Message {
   text: string;
   sender: "me" | "them";
 }
+interface Props {
+  onCode: (c: string) => void;
+}
 
-const ChatApp: React.FC = () => {
+const ChatApp: React.FC<Props> = ({ onCode }) => {
   const socketRef = useRef<Socket | null>(null);
+  const myCodeRef = useRef<string>("");
 
-  const [myCode, setMyCode] = useState<string>("loading");
-  const [users, setUsers] = useState<string[]>([]);
+  /* ──────────────────────────────── state */
+  const [myCode, setMyCode]   = useState("loading");
+  const [users, setUsers]     = useState<string[]>([]);
   const [threads, setThreads] = useState<Record<string, Message[]>>({ public: [] });
-  const [selectedThread, setSelectedThread] = useState<string>("public");
-  const [input, setInput] = useState<string>("");
+  const [selected, setSelected] = useState("public");
+  const [input, setInput]     = useState("");
 
-  const addMessage = (thread: string, message: Message) => {
-    setThreads(prev => {
-      const copy = { ...prev };
-      if (!copy[thread]) copy[thread] = [];
-      copy[thread].push(message);
-      return copy;
-    });
-  };
+  /* ──────────────────────────────── helpers */
+  const addMsg = (thread: string, msg: Message) =>
+    setThreads(p => ({ ...p, [thread]: [...(p[thread] || []), msg] }));
 
-  const scrollBottom = () => {
-    const el = document.getElementById("messages");
-    if (el) el.scrollTop = el.scrollHeight;
-  };
-
+  /* ──────────────────────────────── socket lifecycle */
   useEffect(() => {
     const socket = io();
     socketRef.current = socket;
 
     socket.on("your code", (code: string) => {
+      myCodeRef.current = code;
       setMyCode(code);
+      onCode(code);
     });
 
     socket.on("users update", (codes: string[]) => {
-      setUsers(codes.filter(c => c !== socket.id));
+      // Ignore until we actually know our own code
+      if (!myCodeRef.current) return;
+      setUsers(codes.filter(c => c !== myCodeRef.current));
     });
 
-    socket.on("chat message", (msg: string) => {
-      const [senderCode, ...rest] = msg.split(": ");
-      const text = rest.join(": ");
-      if (senderCode === myCode) return;
-      addMessage("public", { text, sender: "them" });
+    socket.on("chat message", (raw: string) => {
+      const [sender, ...rest] = raw.split(": ");
+      if (sender === myCodeRef.current) return;      // ignore own echo
+      addMsg("public", { text: rest.join(": "), sender: "them" });
     });
 
     socket.on("private message", ({ from, message }) => {
-      addMessage(from, { text: message, sender: "them" });
+      addMsg(from, { text: message, sender: "them" });
     });
 
-    return () => {
-      socket.disconnect();
-    };
+    return () => { socket.disconnect(); };
   }, []);
 
-  useEffect(scrollBottom, [threads, selectedThread]);
+  /* auto-scroll */
+  useEffect(() => {
+    const el = document.getElementById("messages");
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [threads, selected]);
 
-  const handleSend = (e: React.FormEvent) => {
+  /* ──────────────────────────────── send */
+  const send = (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim()) return;
 
-    const socket = socketRef.current;
-    if (!socket) return;
+    const s = socketRef.current;
+    if (!s) return;
 
-    if (selectedThread === "public") {
-      socket.emit("chat message", `${myCode}: ${input}`);
-      addMessage("public", { text: input, sender: "me" });
-    } else {
-      socket.emit("private message", { toCode: selectedThread, message: input });
-      addMessage(selectedThread, { text: input, sender: "me" });
+    if (selected === "public") {
+      s.emit("chat message", `${myCodeRef.current}: ${input}`);
+      addMsg("public", { text: input, sender: "me" });
+    } else if (selected !== myCodeRef.current) {
+      s.emit("private message", { toCode: selected, message: input });
+      addMsg(selected, { text: input, sender: "me" });
     }
-
     setInput("");
   };
 
-  const renderUserItem = (code: string) => (
-    <li
-      key={code}
-      className={`px-4 py-2 cursor-pointer hover:bg-blue-100 ${
-        selectedThread === code ? "bg-blue-200" : ""
-      }`}
-      onClick={() => setSelectedThread(code)}
-    >
-      {code}
-    </li>
-  );
-
-  const messages = threads[selectedThread] ?? [];
+  /* ──────────────────────────────── render */
+  const msgs = threads[selected] || [];
 
   return (
     <>
-      <aside className="w-64 bg-panel border-r border-gray-300 overflow-y-auto">
-        <h2 className="p-4 font-semibold border-b border-gray-300">Users</h2>
-        <ul className="divide-y divide-gray-200">
+      {/* sidebar */}
+      <aside className="w-64 bg-panel border-r border-border overflow-y-auto">
+        <h2 className="p-4 font-semibold border-b border-border">Users</h2>
+        <ul>
           <li
-            className={`px-4 py-2 cursor-pointer hover:bg-blue-100 font-semibold ${
-              selectedThread === "public" ? "bg-blue-200" : ""
+            className={`px-4 py-2 cursor-pointer hover:bg-panelAlt font-semibold ${
+              selected === "public" && "bg-panelAlt"
             }`}
-            onClick={() => setSelectedThread("public")}
+            onClick={() => setSelected("public")}
           >
             Public Chat
           </li>
-          {users.map(renderUserItem)}
+          {users.map(code => (
+            <li
+              key={code}
+              className={`px-4 py-2 cursor-pointer hover:bg-panelAlt ${
+                selected === code && "bg-panelAlt"
+              }`}
+              onClick={() => setSelected(code)}
+            >
+              {code}
+            </li>
+          ))}
         </ul>
       </aside>
 
+      {/* chat area */}
       <section className="flex-1 flex flex-col">
-        <div
-          id="chatHeader"
-          className="px-4 py-2 text-lg font-semibold text-gray-700 border-b border-gray-200"
-        >
-          {selectedThread === "public" ? "Public Chat" : `Chat with ${selectedThread}`}
+        <div className="px-4 py-2 bg-header border-b border-border text-fg font-semibold">
+          {selected === "public" ? "Public Chat" : `Chat with ${selected}`}
         </div>
 
         <ul
           id="messages"
-          className="flex-1 overflow-y-auto p-4 space-y-2 bg-panel flex flex-col w-full"
+          className="flex-1 overflow-y-auto p-4 space-y-2 bg-panel flex flex-col"
         >
-          {messages.map((m, idx) => (
+          {msgs.map((m, i) => (
             <li
-              key={idx}
+              key={i}
               className={`rounded px-4 py-2 max-w-[70%] break-words ${
                 m.sender === "me"
-                  ? "bg-blue-500 text-white self-end text-right"
-                  : "bg-panel-alt text-fg self-start text-left"
+                  ? "bg-accent text-accentFore self-end text-right"
+                  : "bg-panelAlt text-fg self-start border border-border"
               }`}
             >
               {m.text}
@@ -134,18 +133,14 @@ const ChatApp: React.FC = () => {
           ))}
         </ul>
 
-        <form onSubmit={handleSend} className="p-4 bg-gray-50 flex space-x-3 items-center">
+        <form onSubmit={send} className="p-4 bg-panel border-t border-border flex gap-3">
           <input
-            type="text"
+            className="flex-1 border border-border rounded px-3 py-2 bg-panelAlt text-fg placeholder:text-fg/60"
             value={input}
             onChange={e => setInput(e.target.value)}
             placeholder="Type your message…"
-            autoComplete="off"
-            className="flex-1 border border-gray-300 rounded px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
-          <button type="submit" className="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
-            Send
-          </button>
+          <button className="bg-accent text-accentFore px-4 py-2 rounded">Send</button>
         </form>
       </section>
     </>
