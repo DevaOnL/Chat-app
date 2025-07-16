@@ -5,6 +5,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { v4 as uuidv4 } from "uuid";
 import rateLimit from "express-rate-limit";
+import authRoutes from "./auth.js";
 
 // ESM workaround for __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -104,18 +105,30 @@ function broadcastUserList() {
   io.emit("users update", userList);
 }
 
-function broadcastTypingStatus(socketId: string, isTyping: boolean) {
+function broadcastTypingStatus(socketId: string, isTyping: boolean, thread: string) {
   const user = users.get(socketId);
   if (user) {
     user.isTyping = isTyping;
     user.lastSeen = Date.now();
-    io.emit("typing status", { code: user.code, isTyping });
+    
+    if (thread === "public") {
+      io.emit("typing status", { code: user.code, isTyping, thread });
+    } else {
+      // For DMs, send to the specific user
+      const targetSocketId = codeToSocketId.get(thread);
+      if (targetSocketId) {
+        io.to(targetSocketId).emit("typing status", { code: user.code, isTyping, thread: user.code });
+      }
+    }
   }
 }
 
 // Middleware
-app.use(express.static(path.join(__dirname, "../../frontend/dist")));
 app.use(express.json());
+app.use(express.static(path.join(__dirname, "../../frontend/dist")));
+
+// Authentication routes
+app.use("/api/auth", authRoutes);
 
 // Health check endpoint
 app.get("/health", (req, res) => {
@@ -236,8 +249,8 @@ io.on("connection", (socket: Socket) => {
   });
 
   // Handle typing indicators
-  socket.on("typing", (isTyping: boolean) => {
-    broadcastTypingStatus(socket.id, isTyping);
+  socket.on("typing", ({ isTyping, thread }) => {
+    broadcastTypingStatus(socket.id, isTyping, thread);
   });
 
   // Handle message editing (for public messages)

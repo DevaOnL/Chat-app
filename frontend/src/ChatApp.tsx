@@ -1,6 +1,28 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { io, Socket } from "socket.io-client";
 
+// Component for handling long messages with expand/collapse
+const MessageContent: React.FC<{ text: string }> = ({ text }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const shouldTruncate = text.length > 200;
+  
+  if (!shouldTruncate) {
+    return <div className="break-words">{text}</div>;
+  }
+  
+  return (
+    <div className="break-words">
+      {isExpanded ? text : `${text.slice(0, 200)}...`}
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="ml-2 text-xs underline opacity-70 hover:opacity-100"
+      >
+        {isExpanded ? "Show less" : "Show more"}
+      </button>
+    </div>
+  );
+};
+
 interface Message {
   id: string;
   text: string;
@@ -34,9 +56,10 @@ const ChatApp: React.FC<Props> = ({ onCode }) => {
   const [selected, setSelected] = useState("public");
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
-  const [typingUsers, setTypingUsers] = useState<string[]>([]);
+  const [typingUsers, setTypingUsers] = useState<Record<string, string[]>>({ public: [] });
   const [nickname, setNickname] = useState("");
   const [showNicknameModal, setShowNicknameModal] = useState(false);
+  const [myNickname, setMyNickname] = useState("");
   const [connectionStatus, setConnectionStatus] = useState<"connecting" | "connected" | "disconnected">("connecting");
   const [editingMessage, setEditingMessage] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
@@ -75,10 +98,10 @@ const ChatApp: React.FC<Props> = ({ onCode }) => {
 
     if (typing && !isTyping) {
       setIsTyping(true);
-      socket.emit("typing", true);
+      socket.emit("typing", { isTyping: true, thread: selected });
     } else if (!typing && isTyping) {
       setIsTyping(false);
-      socket.emit("typing", false);
+      socket.emit("typing", { isTyping: false, thread: selected });
     }
 
     // Clear existing timeout
@@ -90,10 +113,10 @@ const ChatApp: React.FC<Props> = ({ onCode }) => {
     if (typing) {
       typingTimeoutRef.current = setTimeout(() => {
         setIsTyping(false);
-        socket.emit("typing", false);
+        socket.emit("typing", { isTyping: false, thread: selected });
       }, 3000);
     }
-  }, [isTyping]);
+  }, [isTyping, selected]);
 
   /* ──────────────────────────────── socket lifecycle */
   useEffect(() => {
@@ -132,12 +155,15 @@ const ChatApp: React.FC<Props> = ({ onCode }) => {
       addMsg(from, { id, text: message, sender: from, timestamp });
     });
 
-    socket.on("typing status", ({ code, isTyping }) => {
-      setTypingUsers(prev => 
-        isTyping 
-          ? prev.includes(code) ? prev : [...prev, code]
-          : prev.filter(u => u !== code)
-      );
+    socket.on("typing status", ({ code, isTyping, thread }) => {
+      setTypingUsers(prev => {
+        const threadTyping = prev[thread] || [];
+        const newThreadTyping = isTyping 
+          ? threadTyping.includes(code) ? threadTyping : [...threadTyping, code]
+          : threadTyping.filter(u => u !== code);
+        
+        return { ...prev, [thread]: newThreadTyping };
+      });
     });
 
     socket.on("message edited", (message: Message) => {
@@ -234,6 +260,7 @@ const ChatApp: React.FC<Props> = ({ onCode }) => {
   const setUserNickname = () => {
     if (nickname.trim()) {
       socketRef.current?.emit("set nickname", nickname.trim());
+      setMyNickname(nickname.trim());
       setShowNicknameModal(false);
     }
   };
@@ -305,9 +332,9 @@ const ChatApp: React.FC<Props> = ({ onCode }) => {
           >
             <div className="flex items-center justify-between">
               <span>Public Chat</span>
-              {typingUsers.length > 0 && selected === "public" && (
+              {typingUsers.public && typingUsers.public.length > 0 && (
                 <span className="text-xs text-accent">
-                  {typingUsers.length} typing...
+                  {typingUsers.public.length} typing...
                 </span>
               )}
             </div>
@@ -323,7 +350,7 @@ const ChatApp: React.FC<Props> = ({ onCode }) => {
               <div className="flex items-center justify-between">
                 <span>{user.nickname || user.code}</span>
                 <div className="flex items-center gap-1">
-                  {user.isTyping && (
+                  {typingUsers[user.code] && typingUsers[user.code].includes(myCodeRef.current) && (
                     <span className="text-xs text-accent">typing...</span>
                   )}
                   <div className="w-2 h-2 bg-green-500 rounded-full"></div>
@@ -347,7 +374,7 @@ const ChatApp: React.FC<Props> = ({ onCode }) => {
               className={`flex ${m.sender === myCodeRef.current ? "justify-end" : "justify-start"}`}
             >
               <div
-                className={`rounded-lg px-4 py-2 max-w-[70%] break-words ${
+                className={`rounded-lg px-4 py-2 max-w-[70%] min-w-0 ${
                   m.sender === myCodeRef.current
                     ? "bg-accent text-accentFore"
                     : "bg-panelAlt text-fg border border-border"
@@ -370,12 +397,15 @@ const ChatApp: React.FC<Props> = ({ onCode }) => {
                 ) : (
                   <>
                     <div className="flex items-center justify-between mb-1">
-                      <span className="text-xs opacity-70">
-                        {users.find(u => u.code === m.sender)?.nickname || m.sender}
+                      <span className="text-xs opacity-70 truncate">
+                        {m.sender === myCodeRef.current 
+                          ? (myNickname || myCodeRef.current)
+                          : (users.find(u => u.code === m.sender)?.nickname || m.sender)
+                        }
                       </span>
-                      <span className="text-xs opacity-70">{formatTime(m.timestamp)}</span>
+                      <span className="text-xs opacity-70 ml-2 flex-shrink-0">{formatTime(m.timestamp)}</span>
                     </div>
-                    <div>{m.text}</div>
+                    <MessageContent text={m.text} />
                     {m.edited && <div className="text-xs opacity-70 mt-1">edited</div>}
                     {m.sender === myCodeRef.current && (
                       <div className="flex gap-2 mt-2">
