@@ -7,11 +7,10 @@ import { applyTheme, getInitialTheme } from "./themeUtils";
 interface User {
   id: string;
   email: string;
-  nickname?: string;
+  nickname: string;
 }
 
 const App: React.FC = () => {
-  const [myCode, setMyCode] = useState<string | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -70,7 +69,6 @@ const App: React.FC = () => {
     localStorage.removeItem('user');
     setUser(null);
     setIsAuthenticated(false);
-    setMyCode(null);
   };
 
   // Show loading spinner while checking authentication
@@ -108,21 +106,14 @@ const App: React.FC = () => {
             </button>
           </div>
 
-          {/* User code display */}
-          {myCode && (
-            <span className="text-sm">
-              Your code:&nbsp;
-              <span className="font-mono text-accent">{myCode}</span>
-            </span>
-          )}
+          
           
           <ThemeToggle />
         </div>
       </header>
 
       <main className="flex flex-1 overflow-hidden">
-        {/* Pass setter so ChatApp can lift code up */}
-        <ChatApp onCode={setMyCode} />
+        {user && <ChatApp user={user} />} 
       </main>
     </div>
   );

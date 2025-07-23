@@ -35,8 +35,8 @@ const messageLimiter = new Map<string, { count: number; resetTime: number }>();
 
 interface User {
   id: string;
-  code: string;
-  nickname?: string;
+  email: string;                                         
+  nickname: string;    
   joinTime: number;
   lastSeen: number;
   isTyping?: boolean;
@@ -60,19 +60,19 @@ interface PrivateMessage {
 }
 
 const users = new Map<string, User>(); // socket.id -> User
-const codeToSocketId = new Map<string, string>(); // code -> socket.id
+ const emailToSocketId = new Map<string, string>(); // email -> socket.id 
 const publicMessages: ChatMessage[] = [];
 const privateMessages: PrivateMessage[] = [];
 const maxMessageHistory = 100;
 
 // Utility functions
-function generateUserCode(): string {
-  let code;
-  do {
-    code = uuidv4().slice(0, 6).toUpperCase();
-  } while (codeToSocketId.has(code));
-  return code;
-}
+// function generateUserCode(): string {
+//   let code;
+//   do {
+//     code = uuidv4().slice(0, 6).toUpperCase();
+//   } while (codeToSocketId.has(code));
+//   return code;
+// }
 
 function sanitizeMessage(message: string): string {
   return message.trim().slice(0, 500); // Limit message length
@@ -97,7 +97,8 @@ function isRateLimited(socketId: string): boolean {
 
 function broadcastUserList() {
   const userList = Array.from(users.values()).map(user => ({
-    code: user.code,
+    id: user.id,
+    email: user.email,  
     nickname: user.nickname,
     isTyping: user.isTyping,
     joinTime: user.joinTime
@@ -112,12 +113,12 @@ function broadcastTypingStatus(socketId: string, isTyping: boolean, thread: stri
     user.lastSeen = Date.now();
     
     if (thread === "public") {
-      io.emit("typing status", { code: user.code, isTyping, thread });
+       io.emit("typing status", { email: user.email, isTyping, thread });
     } else {
       // For DMs, send to the specific user
-      const targetSocketId = codeToSocketId.get(thread);
+      const targetSocketId = emailToSocketId.get(thread);
       if (targetSocketId) {
-        io.to(targetSocketId).emit("typing status", { code: user.code, isTyping, thread: user.code });
+        io.to(targetSocketId).emit("typing status", { email: user.email, isTyping, thread: user.email });   
       }
     }
   }
@@ -141,33 +142,36 @@ app.get("/health", (req, res) => {
 
 // Socket.IO connection handling
 io.on("connection", (socket: Socket) => {
-  const userCode = generateUserCode();
+  const { email, nickname, id } = socket.handshake.query; if (typeof id !== 'string' || typeof email !== 'string' || typeof nickname !== 'string') {                                                                                 
+    socket.disconnect();                                                                    
+    return;                                                                                 
+  }  
   const user: User = {
-    id: socket.id,
-    code: userCode,
+    id, 
+    email,
+    nickname,  
     joinTime: Date.now(),
     lastSeen: Date.now()
   };
 
   users.set(socket.id, user);
-  codeToSocketId.set(userCode, socket.id);
-
+emailToSocketId.set(email, socket.id); 
   // Send initial data
-  socket.emit("your code", userCode);
+
   socket.emit("message history", publicMessages.slice(-50)); // Send last 50 messages
   broadcastUserList();
 
-  console.log(`User connected: ${userCode} (${socket.id})`);
+ console.log(`User connected: ${nickname} (${email})`);
 
   // Handle user disconnect
   socket.on("disconnect", () => {
     const user = users.get(socket.id);
     if (user) {
-      codeToSocketId.delete(user.code);
+      emailToSocketId.delete(user.email); 
       users.delete(socket.id);
       messageLimiter.delete(socket.id);
       broadcastUserList();
-      console.log(`User disconnected: ${user.code}`);
+      console.log(`User disconnected: ${user.nickname} (${user.email})`);  
     }
   });
 
@@ -196,7 +200,7 @@ io.on("connection", (socket: Socket) => {
     const message: ChatMessage = {
       id: uuidv4(),
       text: sanitized,
-      sender: user.code,
+      sender: user.email,       
       timestamp: Date.now()
     };
 
@@ -212,14 +216,14 @@ io.on("connection", (socket: Socket) => {
   });
 
   // Handle private messages
-  socket.on("private message", ({ toCode, message }) => {
+  socket.on("private message", ({ toEmail, message }) => {   
     if (isRateLimited(socket.id)) {
       socket.emit("error", "Rate limit exceeded. Please slow down.");
       return;
     }
 
     const user = users.get(socket.id);
-    const targetSocketId = codeToSocketId.get(toCode);
+    const targetSocketId = emailToSocketId.get(toEmail);      
     
     if (!user || !targetSocketId) {
       socket.emit("error", "User not found");
@@ -231,8 +235,8 @@ io.on("connection", (socket: Socket) => {
 
     const privateMsg: PrivateMessage = {
       id: uuidv4(),
-      from: user.code,
-      to: toCode,
+      from: user.email,
+      to: toEmail,  
       message: sanitized,
       timestamp: Date.now()
     };
@@ -245,6 +249,7 @@ io.on("connection", (socket: Socket) => {
     }
 
     io.to(targetSocketId).emit("private message", privateMsg);
+    socket.emit("private message", privateMsg);
     user.lastSeen = Date.now();
   });
 
@@ -253,16 +258,37 @@ io.on("connection", (socket: Socket) => {
     broadcastTypingStatus(socket.id, isTyping, thread);
   });
 
-  // Handle message editing (for public messages)
-  socket.on("edit message", ({ messageId, newText }) => {
+  socket.on("edit message", ({ messageId, newText, isPrivate }) => {
     const user = users.get(socket.id);
     if (!user) return;
 
-    const message = publicMessages.find(m => m.id === messageId && m.sender === user.code);
-    if (message) {
-      message.text = sanitizeMessage(newText);
-      message.edited = true;
-      io.emit("message edited", message);
+    if (isPrivate) {
+      const message = privateMessages.find(m => m.id === messageId && m.from === user.email);
+      if (message) {
+        message.message = sanitizeMessage(newText);
+        (message as any).edited = true;
+
+        const editedMsgForFrontend = {
+          id: message.id,
+          text: message.message,
+          sender: message.from,
+          timestamp: message.timestamp,
+          edited: true,
+        };
+
+        const targetSocketId = emailToSocketId.get(message.to);
+        if (targetSocketId) {
+          io.to(targetSocketId).emit("message edited", editedMsgForFrontend);
+        }
+        socket.emit("message edited", editedMsgForFrontend);
+      }
+    } else {
+      const message = publicMessages.find(m => m.id === messageId && m.sender === user.email);
+      if (message) {
+        message.text = sanitizeMessage(newText);
+        message.edited = true;
+        io.emit("message edited", message);
+      }
     }
   });
 
@@ -271,7 +297,7 @@ io.on("connection", (socket: Socket) => {
     const user = users.get(socket.id);
     if (!user) return;
 
-    const messageIndex = publicMessages.findIndex(m => m.id === messageId && m.sender === user.code);
+    const messageIndex = publicMessages.findIndex(m => m.id === messageId && m.sender === user.email);
     if (messageIndex !== -1) {
       publicMessages.splice(messageIndex, 1);
       io.emit("message deleted", messageId);

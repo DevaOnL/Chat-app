@@ -10,11 +10,11 @@ const router = Router();
 // Signup endpoint
 router.post('/signup', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { email, password } = req.body;
+    const { email, password, nickname } = req.body;
 
     // Validation
-    if (!email || !password) {
-      res.status(400).json({ error: 'Email and password are required' });
+    if (!email || !password || !nickname) {                                                          
+      res.status(400).json({ error: 'Email, password, and nickname are required' });   
       return;
     }
 
@@ -40,7 +40,7 @@ router.post('/signup', async (req: Request, res: Response): Promise<void> => {
       email: email.toLowerCase(),
       password: hashedPassword,
       createdAt: Date.now(),
-      nickname: undefined
+      nickname: nickname
     };
 
     createUser(user);

@@ -32,34 +32,35 @@ interface Message {
 }
 
 interface User {
-  code: string;
-  nickname?: string;
+  id: string;
+  email: string;
+  nickname: string; 
   isTyping?: boolean;
   joinTime: number;
 }
 
 interface Props {
-  onCode: (c: string) => void;
+  user: {  
+    id: string;
+    email: string; 
+    nickname: string; 
+  };   
 }
 
-const ChatApp: React.FC<Props> = ({ onCode }) => {
+const ChatApp: React.FC<Props> = ({ user }) => {
   const socketRef = useRef<Socket | null>(null);
-  const myCodeRef = useRef<string>("");
+   const myEmail = user.email;  
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   /* ──────────────────────────────── state */
-  const [myCode, setMyCode] = useState("loading");
   const [users, setUsers] = useState<User[]>([]);
   const [threads, setThreads] = useState<Record<string, Message[]>>({ public: [] });
   const [selected, setSelected] = useState("public");
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [typingUsers, setTypingUsers] = useState<Record<string, string[]>>({ public: [] });
-  const [nickname, setNickname] = useState("");
-  const [showNicknameModal, setShowNicknameModal] = useState(false);
-  const [myNickname, setMyNickname] = useState("");
   const [connectionStatus, setConnectionStatus] = useState<"connecting" | "connected" | "disconnected">("connecting");
   const [editingMessage, setEditingMessage] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
@@ -73,13 +74,16 @@ const ChatApp: React.FC<Props> = ({ onCode }) => {
   }, []);
 
   const updateMsg = useCallback((messageId: string, newText: string) => {
-    setThreads(prev => ({
-      ...prev,
-      public: prev.public.map(msg => 
+  setThreads(prev => {
+    const updated: Record<string, Message[]> = {};
+    for (const [thread, msgs] of Object.entries(prev)) {
+      updated[thread] = msgs.map(msg =>
         msg.id === messageId ? { ...msg, text: newText, edited: true } : msg
-      )
-    }));
-  }, []);
+      );
+    }
+    return updated;
+  });
+}, []);
 
   const deleteMsg = useCallback((messageId: string) => {
     setThreads(prev => ({
@@ -120,9 +124,8 @@ const ChatApp: React.FC<Props> = ({ onCode }) => {
 
   /* ──────────────────────────────── socket lifecycle */
   useEffect(() => {
-    const socket = io();
+    const socket = io({ query: { id: user.id, email: user.email, nickname: user.nickname } }); 
     socketRef.current = socket;
-
     socket.on("connect", () => {
       setConnectionStatus("connected");
     });
@@ -131,15 +134,14 @@ const ChatApp: React.FC<Props> = ({ onCode }) => {
       setConnectionStatus("disconnected");
     });
 
-    socket.on("your code", (code: string) => {
-      myCodeRef.current = code;
-      setMyCode(code);
-      onCode(code);
-    });
+    // socket.on("your code", (code: string) => {
+    //   myCodeRef.current = code;
+    //   setMyCode(code);
+    //   onCode(code);
+    // });
 
     socket.on("users update", (userList: User[]) => {
-      if (!myCodeRef.current) return;
-      setUsers(userList.filter(u => u.code !== myCodeRef.current));
+      setUsers(userList.filter(u => u.email !== myEmail));  
     });
 
     socket.on("message history", (messages: Message[]) => {
@@ -147,28 +149,38 @@ const ChatApp: React.FC<Props> = ({ onCode }) => {
     });
 
     socket.on("chat message", (message: Message) => {
-      if (message.sender === myCodeRef.current) return;
       addMsg("public", message);
     });
 
-    socket.on("private message", ({ from, message, timestamp, id }) => {
-      addMsg(from, { id, text: message, sender: from, timestamp });
+    socket.on("private message", ({ from, to, message, timestamp, id }) => {
+      const thread = from === myEmail ? to : from;
+      addMsg(thread, { id, text: message, sender: from, timestamp });
     });
 
-    socket.on("typing status", ({ code, isTyping, thread }) => {
+    socket.on("typing status", ({ email, isTyping, thread }) => {          
       setTypingUsers(prev => {
         const threadTyping = prev[thread] || [];
         const newThreadTyping = isTyping 
-          ? threadTyping.includes(code) ? threadTyping : [...threadTyping, code]
-          : threadTyping.filter(u => u !== code);
+         ? threadTyping.includes(email) ? threadTyping : [...threadTyping, email]   
+         : threadTyping.filter(u => u !== email);       
         
         return { ...prev, [thread]: newThreadTyping };
       });
     });
 
     socket.on("message edited", (message: Message) => {
-      updateMsg(message.id, message.text);
+      setThreads(prev => {
+        const newThreads = { ...prev };
+        for (const thread in newThreads) {
+          newThreads[thread] = newThreads[thread].map(msg =>
+            msg.id === message.id ? { ...msg, text: message.text, edited: true } : msg
+          );
+        }
+        return newThreads;
+      });
     });
+
+    
 
     socket.on("message deleted", (messageId: string) => {
       deleteMsg(messageId);
@@ -202,25 +214,9 @@ const ChatApp: React.FC<Props> = ({ onCode }) => {
     handleTyping(false);
 
     if (selected === "public") {
-      const message: Message = {
-        id: Date.now().toString(),
-        text: input,
-        sender: myCodeRef.current,
-        timestamp: Date.now()
-      };
-      
       socket.emit("chat message", input);
-      addMsg("public", message);
-    } else if (selected !== myCodeRef.current) {
-      const message: Message = {
-        id: Date.now().toString(),
-        text: input,
-        sender: myCodeRef.current,
-        timestamp: Date.now()
-      };
-      
-      socket.emit("private message", { toCode: selected, message: input });
-      addMsg(selected, message);
+    } else if (selected !== myEmail) {     
+      socket.emit("private message", { toEmail: selected, message: input });
     }
     setInput("");
     inputRef.current?.focus();
@@ -238,7 +234,12 @@ const ChatApp: React.FC<Props> = ({ onCode }) => {
 
   const saveEdit = () => {
     if (editingMessage && editText.trim()) {
-      socketRef.current?.emit("edit message", { messageId: editingMessage, newText: editText });
+      const isPrivate = selected !== "public";
+      socketRef.current?.emit("edit message", { 
+        messageId: editingMessage, 
+        newText: editText, 
+        isPrivate 
+      });
       updateMsg(editingMessage, editText);
     }
     setEditingMessage(null);
@@ -257,13 +258,13 @@ const ChatApp: React.FC<Props> = ({ onCode }) => {
     }
   };
 
-  const setUserNickname = () => {
-    if (nickname.trim()) {
-      socketRef.current?.emit("set nickname", nickname.trim());
-      setMyNickname(nickname.trim());
-      setShowNicknameModal(false);
-    }
-  };
+  // const setUserNickname = () => {
+  //   if (nickname.trim()) {
+  //     socketRef.current?.emit("set nickname", nickname.trim());
+  //     setMyNickname(nickname.trim());
+  //     setShowNicknameModal(false);
+  //   }
+  // };
 
   const formatTime = (timestamp: number) => {
     return new Date(timestamp).toLocaleTimeString([], { 
@@ -274,7 +275,7 @@ const ChatApp: React.FC<Props> = ({ onCode }) => {
 
   /* ──────────────────────────────── render */
   const msgs = threads[selected] || [];
-  const selectedUser = users.find(u => u.code === selected);
+   const selectedUser = users.find(u => u.email === selected);    
 
   return (
     <>
@@ -287,41 +288,12 @@ const ChatApp: React.FC<Props> = ({ onCode }) => {
         </div>
       )}
 
-      {/* Nickname Modal */}
-      {showNicknameModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <div className="bg-panel p-6 rounded-lg border border-border">
-            <h3 className="text-lg font-semibold mb-4">Set Nickname</h3>
-            <input
-              type="text"
-              value={nickname}
-              onChange={(e) => setNickname(e.target.value)}
-              placeholder="Enter nickname"
-              className="w-full border border-border rounded px-3 py-2 bg-panelAlt text-fg mb-4"
-              maxLength={20}
-            />
-            <div className="flex gap-2">
-              <button onClick={setUserNickname} className="bg-accent text-accentFore px-4 py-2 rounded">
-                Set
-              </button>
-              <button onClick={() => setShowNicknameModal(false)} className="border border-border px-4 py-2 rounded">
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      
 
       {/* sidebar */}
       <aside className="w-64 bg-panel border-r border-border overflow-y-auto">
         <div className="p-4 border-b border-border">
           <h2 className="font-semibold mb-2">Users</h2>
-          <button
-            onClick={() => setShowNicknameModal(true)}
-            className="text-sm text-accent hover:underline"
-          >
-            Set Nickname
-          </button>
         </div>
         <ul>
           <li
@@ -341,16 +313,16 @@ const ChatApp: React.FC<Props> = ({ onCode }) => {
           </li>
           {users.map(user => (
             <li
-              key={user.code}
+              key={user.id}    
               className={`px-4 py-2 cursor-pointer hover:bg-panelAlt ${
-                selected === user.code && "bg-panelAlt"
+               selected === user.email && "bg-panelAlt"        
               }`}
-              onClick={() => setSelected(user.code)}
+              onClick={() => setSelected(user.email)}          
             >
               <div className="flex items-center justify-between">
-                <span>{user.nickname || user.code}</span>
+                 <span>{user.nickname || user.email}</span>               
                 <div className="flex items-center gap-1">
-                  {typingUsers[user.code] && typingUsers[user.code].includes(myCodeRef.current) && (
+                 {typingUsers[user.email] && typingUsers[user.email].includes(myEmail) && (   
                     <span className="text-xs text-accent">typing...</span>
                   )}
                   <div className="w-2 h-2 bg-green-500 rounded-full"></div>
@@ -371,11 +343,11 @@ const ChatApp: React.FC<Props> = ({ onCode }) => {
           {msgs.map((m) => (
             <div
               key={m.id}
-              className={`flex ${m.sender === myCodeRef.current ? "justify-end" : "justify-start"}`}
+              className={`flex ${m.sender === myEmail ? "justify-end" : "justify-start"}`} 
             >
               <div
                 className={`rounded-lg px-4 py-2 max-w-[70%] min-w-0 ${
-                  m.sender === myCodeRef.current
+                  m.sender === myEmail  
                     ? "bg-accent text-accentFore"
                     : "bg-panelAlt text-fg border border-border"
                 }`}
@@ -398,16 +370,14 @@ const ChatApp: React.FC<Props> = ({ onCode }) => {
                   <>
                     <div className="flex items-center justify-between mb-1">
                       <span className="text-xs opacity-70 truncate">
-                        {m.sender === myCodeRef.current 
-                          ? (myNickname || myCodeRef.current)
-                          : (users.find(u => u.code === m.sender)?.nickname || m.sender)
+                        {m.sender === myEmail  ? user.nickname   : (users.find(u => u.email === m.sender)?.nickname || m.sender)   
                         }
                       </span>
                       <span className="text-xs opacity-70 ml-2 flex-shrink-0">{formatTime(m.timestamp)}</span>
                     </div>
                     <MessageContent text={m.text} />
                     {m.edited && <div className="text-xs opacity-70 mt-1">edited</div>}
-                    {m.sender === myCodeRef.current && (
+                   {m.sender === myEmail && (            
                       <div className="flex gap-2 mt-2">
                         <button
                           onClick={() => handleEditMessage(m.id, m.text)}

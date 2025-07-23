@@ -9,7 +9,8 @@ const AuthForm: React.FC<AuthFormProps> = ({ onAuthSuccess }) => {
   const [formData, setFormData] = useState({
     email: '',
     password: '',
-    confirmPassword: ''
+    confirmPassword: '',
+    nickname: ''   
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -34,7 +35,9 @@ const AuthForm: React.FC<AuthFormProps> = ({ onAuthSuccess }) => {
       setError('Password must be at least 6 characters');
       return false;
     }
-
+    if (!isLogin && !formData.nickname) {setError('Nickname is required');                                                              
+        return false;                                                                                  
+    }    
     if (!isLogin && formData.password !== formData.confirmPassword) {
       setError('Passwords do not match');
       return false;
@@ -60,7 +63,8 @@ const AuthForm: React.FC<AuthFormProps> = ({ onAuthSuccess }) => {
         },
         body: JSON.stringify({
           email: formData.email,
-          password: formData.password
+          password: formData.password,
+          nickname: formData.nickname  
         })
       });
 
@@ -110,8 +114,27 @@ const AuthForm: React.FC<AuthFormProps> = ({ onAuthSuccess }) => {
               {error}
             </div>
           )}
+{!isLogin && (
+  <div>
+    <label htmlFor="nickname" className="block text-sm font-medium text-fg">
+      Nickname
+    </label>
+    <input
+      id="nickname"
+      name="nickname"
+      type="text"
+      required
+      value={formData.nickname}
+      onChange={handleInputChange}
+      className="mt-1 w-full px-3 py-2 border border-border rounded-md bg-panelAlt text-fg placeholder:text-fg/60 focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent"
+      placeholder="Choose a nickname"
+    />
+  </div>
+)}
 
           <div>
+
+
             <label htmlFor="email" className="block text-sm font-medium text-fg">
               Email address
             </label>
