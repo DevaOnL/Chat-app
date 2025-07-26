@@ -48,6 +48,9 @@ interface ChatMessage {
   sender: string;
   timestamp: number;
   edited?: boolean;
+  reactions?: {
+    [emoji: string]: string[]; // Array of user IDs who reacted
+  };
 }
 
 interface PrivateMessage {
@@ -57,6 +60,9 @@ interface PrivateMessage {
   message: string;
   timestamp: number;
   read?: boolean;
+  reactions?: {
+    [emoji: string]: string[]; // Array of user IDs who reacted
+  };
 }
 
 const users = new Map<string, User>(); // socket.id -> User
@@ -309,6 +315,80 @@ emailToSocketId.set(email, socket.id);
     const user = users.get(socket.id);
     if (user) {
       user.lastSeen = Date.now();
+    }
+  });
+
+  // Handle message reactions
+  socket.on("toggle reaction", ({ messageId, emoji, userId, isPrivate }) => {
+    console.log(`Reaction received - MessageId: ${messageId}, Emoji: ${emoji}, UserId: ${userId}, IsPrivate: ${isPrivate}`);
+    
+    const user = users.get(socket.id);
+    if (!user || user.id !== userId) {
+      console.log(`User validation failed - Socket user: ${user?.id}, Provided userId: ${userId}`);
+      return;
+    }
+
+    if (isPrivate) {
+      // Handle private message reactions
+      const message = privateMessages.find(m => m.id === messageId);
+      if (message) {
+        console.log(`Found private message for reaction`);
+        if (!message.reactions) message.reactions = {};
+        if (!message.reactions[emoji]) message.reactions[emoji] = [];
+        
+        const userIndex = message.reactions[emoji].indexOf(userId);
+        if (userIndex === -1) {
+          // Add reaction
+          message.reactions[emoji].push(userId);
+          console.log(`Added reaction ${emoji} to private message`);
+        } else {
+          // Remove reaction
+          message.reactions[emoji].splice(userIndex, 1);
+          if (message.reactions[emoji].length === 0) {
+            delete message.reactions[emoji];
+          }
+          console.log(`Removed reaction ${emoji} from private message`);
+        }
+
+        // Send to both users in the private conversation
+        const targetSocketId = emailToSocketId.get(message.from === user.email ? message.to : message.from);
+        const reactionUpdate = { messageId, reactions: message.reactions };
+        
+        socket.emit("reaction updated", reactionUpdate);
+        if (targetSocketId) {
+          io.to(targetSocketId).emit("reaction updated", reactionUpdate);
+        }
+      } else {
+        console.log(`Private message not found for reaction: ${messageId}`);
+      }
+    } else {
+      // Handle public message reactions
+      const message = publicMessages.find(m => m.id === messageId);
+      if (message) {
+        console.log(`Found public message for reaction`);
+        if (!message.reactions) message.reactions = {};
+        if (!message.reactions[emoji]) message.reactions[emoji] = [];
+        
+        const userIndex = message.reactions[emoji].indexOf(userId);
+        if (userIndex === -1) {
+          // Add reaction
+          message.reactions[emoji].push(userId);
+          console.log(`Added reaction ${emoji} to public message. Reactions:`, message.reactions);
+        } else {
+          // Remove reaction
+          message.reactions[emoji].splice(userIndex, 1);
+          if (message.reactions[emoji].length === 0) {
+            delete message.reactions[emoji];
+          }
+          console.log(`Removed reaction ${emoji} from public message. Reactions:`, message.reactions);
+        }
+
+        // Broadcast to all users
+        console.log(`Broadcasting reaction update:`, { messageId, reactions: message.reactions });
+        io.emit("reaction updated", { messageId, reactions: message.reactions });
+      } else {
+        console.log(`Public message not found for reaction: ${messageId}`);
+      }
     }
   });
 });

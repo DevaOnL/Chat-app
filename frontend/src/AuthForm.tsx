@@ -68,7 +68,24 @@ const AuthForm: React.FC<AuthFormProps> = ({ onAuthSuccess }) => {
         })
       });
 
-      const data = await response.json();
+      console.log('Response status:', response.status);
+      console.log('Response headers:', response.headers);
+      
+      const responseText = await response.text();
+      console.log('Response text:', responseText);
+      
+      if (!responseText) {
+        throw new Error('Empty response from server');
+      }
+      
+      let data;
+      try {
+        data = JSON.parse(responseText);
+      } catch (parseError) {
+        console.error('JSON parse error:', parseError);
+        console.error('Response was:', responseText);
+        throw new Error('Invalid JSON response from server');
+      }
 
       if (!response.ok) {
         throw new Error(data.error || 'Authentication failed');
