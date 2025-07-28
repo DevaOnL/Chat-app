@@ -128,10 +128,15 @@ const ChatApp: React.FC<Props> = ({ user }) => {
 
   /* ──────────────────────────────── helpers */
   const addMsg = useCallback((thread: string, msg: Message) => {
-    setThreads(prev => ({
-      ...prev,
-      [thread]: [...(prev[thread] || []), msg]
-    }));
+    console.log(`➕ Adding message to thread "${thread}":`, msg);
+    setThreads(prev => {
+      const updated = {
+        ...prev,
+        [thread]: [...(prev[thread] || []), msg]
+      };
+      console.log(`📊 Updated threads:`, updated);
+      return updated;
+    });
   }, []);
 
   const updateMsg = useCallback((messageId: string, newText: string) => {
@@ -265,10 +270,12 @@ const ChatApp: React.FC<Props> = ({ user }) => {
     });
 
     socket.on("message history", (messages: Message[]) => {
+      console.log(`📥 Received message history: ${messages.length} messages`);
       setThreads(prev => ({ ...prev, public: messages }));
     });
 
     socket.on("chat message", (message: Message) => {
+      console.log(`📥 Received new chat message:`, message);
       addMsg("public", message);
     });
 

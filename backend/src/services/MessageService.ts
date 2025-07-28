@@ -31,10 +31,14 @@ export class MessageService {
    * Get messages for a specific thread (public or private)
    */
   static async getMessagesByThread(thread: string, limit: number = 50): Promise<IMessage[]> {
-    return await Message.find({ thread })
+    // Get most recent messages first, then reverse for chronological order
+    const messages = await Message.find({ thread })
       .sort({ createdAt: -1 }) // Most recent first
       .limit(limit)
       .exec();
+    
+    // Reverse to get chronological order (oldest to newest)
+    return messages.reverse();
   }
 
   /**
