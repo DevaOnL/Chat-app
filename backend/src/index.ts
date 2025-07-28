@@ -6,10 +6,13 @@ import { fileURLToPath } from "url";
 import { v4 as uuidv4 } from "uuid";
 import rateLimit from "express-rate-limit";
 import dotenv from "dotenv";
+import multer from "multer";
+import fs from "fs";
 import { connectDB } from "./config/database.js";
 import { UserService } from "./services/UserService.js";
 import { MessageService } from "./services/MessageService.js";
 import authRoutes from "./auth.js";
+import { authenticateToken, AuthRequest } from "./middleware.js";
 
 // Load environment variables
 dotenv.config();
@@ -143,6 +146,58 @@ app.use(express.static(path.join(__dirname, "../../frontend/dist")));
 // Authentication routes
 app.use("/api/auth", authRoutes);
 
+// File upload configuration
+const uploadsDir = path.join(__dirname, "../../uploads");
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadsDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const extension = path.extname(file.originalname);
+    cb(null, `${uniqueSuffix}${extension}`);
+  }
+});
+
+const upload = multer({ 
+  storage,
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    // Allow all file types for now
+    cb(null, true);
+  }
+});
+
+// Serve uploaded files
+app.use("/uploads", express.static(uploadsDir));
+
+// File upload endpoint
+app.post("/api/upload", authenticateToken, upload.single('file'), async (req: AuthRequest, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ error: 'No file uploaded' });
+    }
+
+    const fileUrl = `/uploads/${req.file.filename}`;
+    
+    res.json({
+      fileName: req.file.originalname,
+      fileSize: req.file.size,
+      fileType: req.file.mimetype,
+      fileUrl: fileUrl
+    });
+  } catch (error) {
+    console.error('File upload error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Health check endpoint
 app.get("/health", (req, res) => {
   res.json({ 
@@ -176,14 +231,23 @@ emailToSocketId.set(email, socket.id);
     console.log(`📩 Loading ${recentMessages.length} messages from MongoDB for user: ${email}`);
     
     // Transform messages to frontend format
-    const transformedMessages = recentMessages.map(msg => ({
-      id: (msg._id as string).toString(),
-      text: msg.text,
-      sender: msg.sender,
-      timestamp: msg.createdAt.getTime(),
-      edited: msg.edited || false,
-      reactions: Object.fromEntries(msg.reactions || new Map())
-    }));
+    const transformedMessages = recentMessages.map(msg => {
+      const transformedMsg: any = {
+        id: (msg._id as string).toString(),
+        text: msg.text,
+        sender: msg.sender,
+        timestamp: msg.createdAt.getTime(),
+        edited: msg.edited || false,
+        reactions: Object.fromEntries(msg.reactions || new Map())
+      };
+      
+      // Add file data if present
+      if (msg.file) {
+        transformedMsg.file = msg.file;
+      }
+      
+      return transformedMsg;
+    });
     
     socket.emit("message history", transformedMessages);
   } catch (error) {
@@ -217,7 +281,7 @@ emailToSocketId.set(email, socket.id);
   });
 
   // Handle public chat messages
-  socket.on("chat message", async (msg: string) => {
+  socket.on("chat message", async (msg: string, fileData?: any) => {
     if (isRateLimited(socket.id)) {
       socket.emit("error", "Rate limit exceeded. Please slow down.");
       return;
@@ -231,21 +295,35 @@ emailToSocketId.set(email, socket.id);
 
     try {
       // Save message to database
-      const message = await MessageService.createMessage({
+      const messageData: any = {
         text: sanitized,
         sender: user.email,
         thread: "public"
-      });
+      };
 
-      console.log(`💾 Saved message to MongoDB: "${sanitized}" from ${user.email}`);
+      // Add file data if present
+      if (fileData) {
+        messageData.file = fileData;
+      }
+
+      const message = await MessageService.createMessage(messageData);
+
+      console.log(`💾 Saved message to MongoDB: "${sanitized}" from ${user.email}${fileData ? ' with file' : ''}`);
 
       // Broadcast to all connected clients
-      io.emit("chat message", {
+      const messageToSend: any = {
         id: (message._id as string).toString(),
         text: message.text,
         sender: message.sender,
         timestamp: message.createdAt.getTime()
-      });
+      };
+
+      // Add file data if present
+      if (message.file) {
+        messageToSend.file = message.file;
+      }
+
+      io.emit("chat message", messageToSend);
       
       user.lastSeen = Date.now();
     } catch (error) {
@@ -255,7 +333,7 @@ emailToSocketId.set(email, socket.id);
   });
 
   // Handle private messages
-  socket.on("private message", async ({ toEmail, message }) => {   
+  socket.on("private message", async ({ toEmail, message, file }) => {   
     if (isRateLimited(socket.id)) {
       socket.emit("error", "Rate limit exceeded. Please slow down.");
       return;
@@ -274,13 +352,20 @@ emailToSocketId.set(email, socket.id);
 
     try {
       // Save private message to database
-      const savedMessage = await MessageService.createMessage({
+      const messageData: any = {
         text: sanitized,
         sender: user.email,
         thread: toEmail // Use recipient email as thread for private messages
-      });
+      };
 
-      const privateMsg = {
+      // Add file data if present
+      if (file) {
+        messageData.file = file;
+      }
+
+      const savedMessage = await MessageService.createMessage(messageData);
+
+      const privateMsg: any = {
         id: (savedMessage._id as string).toString(),
         from: user.email,
         to: toEmail,  
@@ -288,7 +373,12 @@ emailToSocketId.set(email, socket.id);
         timestamp: savedMessage.createdAt.getTime()
       };
 
-      console.log(`💾 Saved private message to MongoDB from ${user.email} to ${toEmail}`);
+      // Add file data if present
+      if (savedMessage.file) {
+        privateMsg.file = savedMessage.file;
+      }
+
+      console.log(`💾 Saved private message to MongoDB from ${user.email} to ${toEmail}${file ? ' with file' : ''}`);
 
       io.to(targetSocketId).emit("private message", privateMsg);
       socket.emit("private message", privateMsg);

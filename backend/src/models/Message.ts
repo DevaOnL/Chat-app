@@ -6,6 +6,12 @@ export interface IMessage extends Document {
   thread: string; // 'public' or email for private messages
   edited?: boolean;
   reactions?: Map<string, string[]>; // emoji -> array of user emails
+  file?: {
+    fileName: string;
+    fileSize: number;
+    fileType: string;
+    fileUrl: string;
+  };
   createdAt: Date;
   updatedAt: Date;
 }
@@ -35,6 +41,24 @@ const MessageSchema: Schema = new Schema({
     type: Map,
     of: [String], // Array of user emails who reacted
     default: new Map()
+  },
+  file: {
+    fileName: {
+      type: String,
+      required: false
+    },
+    fileSize: {
+      type: Number,
+      required: false
+    },
+    fileType: {
+      type: String,
+      required: false
+    },
+    fileUrl: {
+      type: String,
+      required: false
+    }
   }
 }, {
   timestamps: true, // Automatically adds createdAt and updatedAt

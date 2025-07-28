@@ -23,9 +23,12 @@ const Settings: React.FC<SettingsProps> = ({ user, onClose, onUserUpdate }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [errors, setErrors] = useState<{ [key: string]: string }>({});
   const [successMessage, setSuccessMessage] = useState('');
+  const [fieldSuccessMessages, setFieldSuccessMessages] = useState<{ [key: string]: string }>({});
 
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
+    const oldValue = formData[name as keyof typeof formData];
+    
     setFormData(prev => ({
       ...prev,
       [name]: value
@@ -37,6 +40,26 @@ const Settings: React.FC<SettingsProps> = ({ user, onClose, onUserUpdate }) => {
         ...prev,
         [name]: ''
       }));
+    }
+
+    // Clear field success message when user starts typing
+    if (fieldSuccessMessages[name]) {
+      setFieldSuccessMessages(prev => ({
+        ...prev,
+        [name]: ''
+      }));
+    }
+
+    // Show success message if value changed from original
+    if (value !== oldValue && value.trim() !== '') {
+      const originalValue = name === 'nickname' ? user.nickname : user.email;
+      if (value !== originalValue) {
+        const fieldName = name === 'nickname' ? 'Display Name' : 'Email Address';
+        setFieldSuccessMessages(prev => ({
+          ...prev,
+          [name]: `${fieldName} changed - click "Confirm Changes" to save`
+        }));
+      }
     }
   };
 
@@ -76,6 +99,12 @@ const Settings: React.FC<SettingsProps> = ({ user, onClose, onUserUpdate }) => {
         throw new Error('No authentication token found');
       }
 
+      console.log('Making request to /api/auth/profile with token:', token.substring(0, 20) + '...');
+      console.log('Form data being sent:', {
+        ...formData,
+        avatar: formData.avatar ? `[${formData.avatar.length} characters]` : 'undefined'
+      });
+
       const response = await fetch('/api/auth/profile', {
         method: 'PUT',
         headers: {
@@ -84,6 +113,17 @@ const Settings: React.FC<SettingsProps> = ({ user, onClose, onUserUpdate }) => {
         },
         body: JSON.stringify(formData)
       });
+
+      console.log('Response status:', response.status);
+      console.log('Response headers:', Object.fromEntries(response.headers.entries()));
+
+      // Check if the response is JSON
+      const contentType = response.headers.get('content-type');
+      if (!contentType || !contentType.includes('application/json')) {
+        const text = await response.text();
+        console.error('Non-JSON response received:', text);
+        throw new Error(`Server returned HTML instead of JSON. This usually means the API endpoint was not found or there's an authentication issue.`);
+      }
 
       const data = await response.json();
 
@@ -216,7 +256,7 @@ const Settings: React.FC<SettingsProps> = ({ user, onClose, onUserUpdate }) => {
                     type="file"
                     accept="image/*"
                     onChange={handleAvatarUpload}
-                    className="block w-full text-sm text-fg-alt file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-accent file:text-white hover:file:bg-accent/90 file:cursor-pointer"
+                    className="block w-full text-sm text-fg file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-accent file:text-accentFore hover:file:bg-accent hover:file:opacity-90 file:cursor-pointer file:transition-all bg-panelAlt border border-border rounded-lg"
                   />
                 </label>
                 
@@ -256,6 +296,14 @@ const Settings: React.FC<SettingsProps> = ({ user, onClose, onUserUpdate }) => {
               {errors.nickname && (
                 <p className="text-red-500 text-sm mt-1">{errors.nickname}</p>
               )}
+              {fieldSuccessMessages.nickname && (
+                <p className="text-green-500 text-sm mt-1 flex items-center gap-1">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                  {fieldSuccessMessages.nickname}
+                </p>
+              )}
             </div>
 
             {/* Email Field */}
@@ -277,6 +325,14 @@ const Settings: React.FC<SettingsProps> = ({ user, onClose, onUserUpdate }) => {
               {errors.email && (
                 <p className="text-red-500 text-sm mt-1">{errors.email}</p>
               )}
+              {fieldSuccessMessages.email && (
+                <p className="text-green-500 text-sm mt-1 flex items-center gap-1">
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                  {fieldSuccessMessages.email}
+                </p>
+              )}
             </div>
 
             {/* Action Buttons */}
@@ -284,7 +340,7 @@ const Settings: React.FC<SettingsProps> = ({ user, onClose, onUserUpdate }) => {
               <button
                 type="button"
                 onClick={onClose}
-                className="flex-1 px-4 py-2 text-fg-alt border border-border rounded-lg hover:bg-panelAlt transition-colors"
+                className="flex-1 px-4 py-2 text-fg opacity-70 border border-border rounded-lg hover:bg-panelAlt hover:opacity-100 transition-all"
                 disabled={isLoading}
               >
                 Cancel
@@ -292,9 +348,17 @@ const Settings: React.FC<SettingsProps> = ({ user, onClose, onUserUpdate }) => {
               <button
                 type="submit"
                 disabled={isLoading}
-                className="flex-1 px-4 py-2 bg-accent text-white rounded-lg hover:bg-accent/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                className="flex-1 px-4 py-2 bg-accent text-accentFore rounded-lg hover:bg-accent hover:opacity-90 transition-all disabled:opacity-50 disabled:cursor-not-allowed font-medium"
               >
-                {isLoading ? 'Saving...' : 'Save Changes'}
+                {isLoading ? (
+                  <span className="flex items-center justify-center gap-2">
+                    <svg className="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                    Saving...
+                  </span>
+                ) : 'Confirm Changes'}
               </button>
             </div>
           </form>

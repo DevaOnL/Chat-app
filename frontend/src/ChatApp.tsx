@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { io, Socket } from "socket.io-client";
 import Avatar from "./Avatar";
+import FileUpload from "./FileUpload";
+import FileMessage from "./FileMessage";
 
 // Emoji picker component
 const EmojiPicker: React.FC<{
@@ -87,6 +89,12 @@ interface Message {
   reactions?: {
     [emoji: string]: string[]; // Array of user IDs who reacted
   };
+  file?: {
+    fileName: string;
+    fileSize: number;
+    fileType: string;
+    fileUrl: string;
+  };
 }
 
 interface User {
@@ -111,8 +119,10 @@ const ChatApp: React.FC<Props> = ({ user }) => {
   const socketRef = useRef<Socket | null>(null);
    const myEmail = user.email;  
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const shouldAutoScrollRef = useRef(true);
 
   /* ──────────────────────────────── state */
   const [users, setUsers] = useState<User[]>([]);
@@ -125,19 +135,36 @@ const ChatApp: React.FC<Props> = ({ user }) => {
   const [editingMessage, setEditingMessage] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
   const [showEmojiPicker, setShowEmojiPicker] = useState<string | null>(null); // messageId for which picker is shown
+  const [showFileUpload, setShowFileUpload] = useState(false);
+  const [isUploadingFile, setIsUploadingFile] = useState(false);
 
   /* ──────────────────────────────── helpers */
-  const addMsg = useCallback((thread: string, msg: Message) => {
-    console.log(`➕ Adding message to thread "${thread}":`, msg);
-    setThreads(prev => {
-      const updated = {
-        ...prev,
-        [thread]: [...(prev[thread] || []), msg]
-      };
-      console.log(`📊 Updated threads:`, updated);
-      return updated;
-    });
+  const scrollToBottom = useCallback(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
+
+  const isNearBottom = useCallback(() => {
+    const container = messagesContainerRef.current;
+    if (!container) return true;
+    
+    const threshold = 100; // pixels from bottom
+    const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    return distanceFromBottom <= threshold;
+  }, []);
+
+  const handleScroll = useCallback(() => {
+    shouldAutoScrollRef.current = isNearBottom();
+  }, [isNearBottom]);
+
+  const addMsg = useCallback((thread: string, msg: Message) => {
+    setThreads(prev => ({
+      ...prev,
+      [thread]: [...(prev[thread] || []), msg]
+    }));
+    // Force auto-scroll when a new message is added
+    shouldAutoScrollRef.current = true;
+    setTimeout(() => scrollToBottom(), 50);
+  }, [scrollToBottom]);
 
   const updateMsg = useCallback((messageId: string, newText: string) => {
   setThreads(prev => {
@@ -182,10 +209,6 @@ const ChatApp: React.FC<Props> = ({ user }) => {
     // Close emoji picker after selecting
     setShowEmojiPicker(null);
   }, [user.id, selected]);
-
-  const scrollToBottom = useCallback(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, []);
 
   const handleTyping = useCallback((typing: boolean) => {
     const socket = socketRef.current;
@@ -270,12 +293,10 @@ const ChatApp: React.FC<Props> = ({ user }) => {
     });
 
     socket.on("message history", (messages: Message[]) => {
-      console.log(`📥 Received message history: ${messages.length} messages`);
       setThreads(prev => ({ ...prev, public: messages }));
     });
 
     socket.on("chat message", (message: Message) => {
-      console.log(`📥 Received new chat message:`, message);
       addMsg("public", message);
     });
 
@@ -335,8 +356,17 @@ const ChatApp: React.FC<Props> = ({ user }) => {
 
   /* auto-scroll */
   useEffect(() => {
+    // Always auto-scroll when switching threads
+    shouldAutoScrollRef.current = true;
     scrollToBottom();
-  }, [threads, selected, scrollToBottom]);
+  }, [selected, scrollToBottom]);
+
+  // Auto-scroll only when messages change AND user should auto-scroll
+  useEffect(() => {
+    if (shouldAutoScrollRef.current) {
+      scrollToBottom();
+    }
+  }, [threads[selected]?.length, scrollToBottom]);
 
   /* ──────────────────────────────── send */
   const send = (e: React.FormEvent) => {
@@ -348,6 +378,9 @@ const ChatApp: React.FC<Props> = ({ user }) => {
 
     handleTyping(false);
     setShowEmojiPicker(null); // Close emoji picker when sending
+    
+    // Force auto-scroll when user sends a message
+    shouldAutoScrollRef.current = true;
 
     if (selected === "public") {
       socket.emit("chat message", input);
@@ -400,6 +433,67 @@ const ChatApp: React.FC<Props> = ({ user }) => {
       console.log(`🗑️ Sending delete request for message: ${messageId}`);
       socketRef.current?.emit("delete message", messageId);
       // Don't delete from local state immediately - wait for server confirmation
+    }
+  };
+
+  const handleFileUpload = async (file: File) => {
+    setIsUploadingFile(true);
+
+    try {
+      // Create FormData for file upload
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('thread', selected);
+
+      // Get the auth token
+      const token = localStorage.getItem('token');
+      if (!token) {
+        throw new Error('No authentication token found');
+      }
+
+      // Upload file to server
+      const response = await fetch('/api/upload', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`
+        },
+        body: formData
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || 'Failed to upload file');
+      }
+
+      const fileData = await response.json();
+
+      // Send file message through socket
+      const fileMessage = {
+        text: `📎 ${file.name}`,
+        file: {
+          fileName: file.name,
+          fileSize: file.size,
+          fileType: file.type,
+          fileUrl: fileData.fileUrl
+        }
+      };
+
+      if (selected === "public") {
+        socketRef.current?.emit("chat message", fileMessage.text, fileMessage.file);
+      } else {
+        socketRef.current?.emit("private message", { 
+          toEmail: selected, 
+          message: fileMessage.text,
+          file: fileMessage.file
+        });
+      }
+
+      setShowFileUpload(false);
+    } catch (error) {
+      console.error('File upload error:', error);
+      alert(error instanceof Error ? error.message : 'Failed to upload file');
+    } finally {
+      setIsUploadingFile(false);
     }
   };
 
@@ -493,7 +587,11 @@ const ChatApp: React.FC<Props> = ({ user }) => {
           {selected === "public" ? "Public Chat" : `Chat with ${selectedUser?.nickname || selected}`}
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 space-y-2 bg-panel">
+        <div 
+          ref={messagesContainerRef}
+          onScroll={handleScroll}
+          className="flex-1 overflow-y-auto p-4 space-y-2 bg-panel"
+        >
           {msgs.map((m) => (
             <div
               key={m.id}
@@ -538,7 +636,20 @@ const ChatApp: React.FC<Props> = ({ user }) => {
                       </span>
                       <span className="text-xs opacity-70 ml-2 flex-shrink-0">{formatTime(m.timestamp)}</span>
                     </div>
-                    <MessageContent text={m.text} />
+                    
+                    {/* Display file attachment if present */}
+                    {m.file && m.file.fileName && m.file.fileType ? (
+                      <FileMessage 
+                        fileName={m.file.fileName}
+                        fileSize={m.file.fileSize || 0}
+                        fileType={m.file.fileType}
+                        fileUrl={m.file.fileUrl}
+                        isImage={m.file.fileType.startsWith('image/')}
+                      />
+                    ) : (
+                      <MessageContent text={m.text} />
+                    )}
+                    
                     {m.edited && <div className="text-xs opacity-70 mt-1">edited</div>}
                     
                     {/* Display reactions */}
@@ -607,19 +718,59 @@ const ChatApp: React.FC<Props> = ({ user }) => {
           <div ref={messagesEndRef} />
         </div>
 
+        {/* File upload panel */}
+        {showFileUpload && (
+          <div className="p-4 bg-panel border-t border-border">
+            <div className="mb-4 p-4 border border-border rounded-lg bg-panelAlt">
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-sm font-medium text-fg">
+                  Share a file
+                </h3>
+                <button
+                  onClick={() => setShowFileUpload(false)}
+                  className="text-fg/60 hover:text-fg"
+                >
+                  ✕
+                </button>
+              </div>
+              <FileUpload 
+                onFileSelect={handleFileUpload} 
+                onClose={() => setShowFileUpload(false)}
+                isUploading={isUploadingFile}
+              />
+            </div>
+          </div>
+        )}
+
         <form onSubmit={send} className="p-4 bg-panel border-t border-border flex gap-3">
+          {/* File upload button */}
+          <button
+            type="button"
+            onClick={() => setShowFileUpload(!showFileUpload)}
+            disabled={isUploadingFile}
+            className={`p-2 rounded-full transition-colors ${
+              showFileUpload 
+                ? 'bg-accent text-accentFore' 
+                : 'bg-panelAlt text-fg/60 hover:text-accent border border-border'
+            } ${isUploadingFile ? 'opacity-50 cursor-not-allowed' : ''}`}
+            title="Share file"
+          >
+            <span className="text-lg font-bold">+</span>
+          </button>
+
           <input
             ref={inputRef}
-            className="flex-1 border border-border rounded px-3 py-2 bg-panelAlt text-fg placeholder:text-fg/60"
+            className="flex-1 border border-border rounded px-3 py-2 bg-panelAlt text-fg placeholder:text-fg/60 disabled:opacity-50"
             value={input}
             onChange={handleInputChange}
-            placeholder="Type your message…"
+            placeholder={isUploadingFile ? "Uploading file..." : "Type your message…"}
             maxLength={500}
+            disabled={isUploadingFile}
           />
           <button 
             type="submit" 
             className="bg-accent text-accentFore px-4 py-2 rounded disabled:opacity-50"
-            disabled={!input.trim()}
+            disabled={!input.trim() || isUploadingFile}
           >
             Send
           </button>
