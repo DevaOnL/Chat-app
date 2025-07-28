@@ -1,8 +1,9 @@
 // src/auth.ts
-import { Router, Request, Response } from 'express';
+import { Router, Request, Response, NextFunction } from 'express';
 import bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
-import { createUser, findUserByEmail, findUserById } from './users.js';
+import { UserService } from './services/UserService.js';
+import { IUser } from './models/User.js';
 import { generateToken, authenticateToken, AuthRequest } from './middleware.js';
 
 const router = Router();
@@ -24,35 +25,29 @@ router.post('/signup', async (req: Request, res: Response): Promise<void> => {
     }
 
     // Check if user already exists
-    const existingUser = findUserByEmail(email);
+    const existingUser = await UserService.findUserByEmail(email);
     if (existingUser) {
       res.status(409).json({ error: 'User already exists' });
       return;
     }
 
-    // Hash password
-    const saltRounds = 10;
-    const hashedPassword = await bcrypt.hash(password, saltRounds);
-
     // Create user
-    const user = {
-      id: uuidv4(),
+    const userData = {
       email: email.toLowerCase(),
-      password: hashedPassword,
-      createdAt: Date.now(),
+      password: password,
       nickname: nickname
     };
 
-    createUser(user);
+    const user: IUser = await UserService.createUser(userData);
 
     // Generate token
-    const token = generateToken({ id: user.id, email: user.email });
+    const token = generateToken({ id: (user._id as string).toString(), email: user.email });
 
     res.status(201).json({
       message: 'User created successfully',
       token,
       user: {
-        id: user.id,
+        id: (user._id as string).toString(),
         email: user.email,
         nickname: user.nickname
       }
@@ -75,27 +70,27 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
     }
 
     // Find user
-    const user = findUserByEmail(email);
+    const user = await UserService.findUserByEmail(email);
     if (!user) {
       res.status(401).json({ error: 'Invalid credentials' });
       return;
     }
 
     // Verify password
-    const isValidPassword = await bcrypt.compare(password, user.password);
+    const isValidPassword = await UserService.validatePassword(user, password);
     if (!isValidPassword) {
       res.status(401).json({ error: 'Invalid credentials' });
       return;
     }
 
     // Generate token
-    const token = generateToken({ id: user.id, email: user.email });
+    const token = generateToken({ id: (user._id as string).toString(), email: user.email });
 
     res.json({
       message: 'Login successful',
       token,
       user: {
-        id: user.id,
+        id: (user._id as string).toString(),
         email: user.email,
         nickname: user.nickname
       }
@@ -107,7 +102,9 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
 });
 
 // Get current user info (protected route)
-router.get('/me', authenticateToken, (req: AuthRequest, res: Response): void => {
+router.get('/me', (req: AuthRequest, res: Response, next: NextFunction) => {
+  authenticateToken(req, res, next).catch(next);
+}, (req: AuthRequest, res: Response): void => {
   res.json({
     user: req.user
   });

@@ -4,6 +4,7 @@ export interface User {
   email: string;
   password: string; // hashed
   nickname?: string;
+  avatar?: string; // URL to avatar image or base64 data
   createdAt: number;
 }
 

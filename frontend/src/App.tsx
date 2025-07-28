@@ -8,6 +8,7 @@ interface User {
   id: string;
   email: string;
   nickname: string;
+  avatar?: string;
 }
 
 const App: React.FC = () => {

@@ -5,7 +5,14 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { v4 as uuidv4 } from "uuid";
 import rateLimit from "express-rate-limit";
+import dotenv from "dotenv";
+import { connectDB } from "./config/database.js";
+import { UserService } from "./services/UserService.js";
+import { MessageService } from "./services/MessageService.js";
 import authRoutes from "./auth.js";
+
+// Load environment variables
+dotenv.config();
 
 // ESM workaround for __dirname
 const __filename = fileURLToPath(import.meta.url);
@@ -65,10 +72,9 @@ interface PrivateMessage {
   };
 }
 
-const users = new Map<string, User>(); // socket.id -> User
- const emailToSocketId = new Map<string, string>(); // email -> socket.id 
-const publicMessages: ChatMessage[] = [];
-const privateMessages: PrivateMessage[] = [];
+const users = new Map<string, User>(); // socket.id -> User  
+const emailToSocketId = new Map<string, string>(); // email -> socket.id 
+// Note: Messages are now stored in MongoDB, not in memory
 const maxMessageHistory = 100;
 
 // Utility functions
@@ -147,7 +153,7 @@ app.get("/health", (req, res) => {
 });
 
 // Socket.IO connection handling
-io.on("connection", (socket: Socket) => {
+io.on("connection", async (socket: Socket) => {
   const { email, nickname, id } = socket.handshake.query; if (typeof id !== 'string' || typeof email !== 'string' || typeof nickname !== 'string') {                                                                                 
     socket.disconnect();                                                                    
     return;                                                                                 
@@ -164,7 +170,16 @@ io.on("connection", (socket: Socket) => {
 emailToSocketId.set(email, socket.id); 
   // Send initial data
 
-  socket.emit("message history", publicMessages.slice(-50)); // Send last 50 messages
+  // Send recent public messages from database
+  try {
+    const recentMessages = await MessageService.getMessagesByThread("public", 50);
+    console.log(`📩 Loading ${recentMessages.length} messages from MongoDB for user: ${email}`);
+    socket.emit("message history", recentMessages);
+  } catch (error) {
+    console.error("❌ Error fetching message history:", error);
+    socket.emit("message history", []);
+  }
+  
   broadcastUserList();
 
  console.log(`User connected: ${nickname} (${email})`);
@@ -191,7 +206,7 @@ emailToSocketId.set(email, socket.id);
   });
 
   // Handle public chat messages
-  socket.on("chat message", (msg: string) => {
+  socket.on("chat message", async (msg: string) => {
     if (isRateLimited(socket.id)) {
       socket.emit("error", "Rate limit exceeded. Please slow down.");
       return;
@@ -203,26 +218,33 @@ emailToSocketId.set(email, socket.id);
     const sanitized = sanitizeMessage(msg);
     if (!sanitized) return;
 
-    const message: ChatMessage = {
-      id: uuidv4(),
-      text: sanitized,
-      sender: user.email,       
-      timestamp: Date.now()
-    };
+    try {
+      // Save message to database
+      const message = await MessageService.createMessage({
+        text: sanitized,
+        sender: user.email,
+        thread: "public"
+      });
 
-    publicMessages.push(message);
-    
-    // Keep only recent messages
-    if (publicMessages.length > maxMessageHistory) {
-      publicMessages.shift();
+      console.log(`💾 Saved message to MongoDB: "${sanitized}" from ${user.email}`);
+
+      // Broadcast to all connected clients
+      io.emit("chat message", {
+        id: message._id,
+        text: message.text,
+        sender: message.sender,
+        timestamp: message.createdAt.getTime()
+      });
+      
+      user.lastSeen = Date.now();
+    } catch (error) {
+      console.error("Error saving message:", error);
+      socket.emit("error", "Failed to send message");
     }
-
-    io.emit("chat message", message);
-    user.lastSeen = Date.now();
   });
 
   // Handle private messages
-  socket.on("private message", ({ toEmail, message }) => {   
+  socket.on("private message", async ({ toEmail, message }) => {   
     if (isRateLimited(socket.id)) {
       socket.emit("error", "Rate limit exceeded. Please slow down.");
       return;
@@ -239,23 +261,31 @@ emailToSocketId.set(email, socket.id);
     const sanitized = sanitizeMessage(message);
     if (!sanitized) return;
 
-    const privateMsg: PrivateMessage = {
-      id: uuidv4(),
-      from: user.email,
-      to: toEmail,  
-      message: sanitized,
-      timestamp: Date.now()
-    };
+    try {
+      // Save private message to database
+      const savedMessage = await MessageService.createMessage({
+        text: sanitized,
+        sender: user.email,
+        thread: toEmail // Use recipient email as thread for private messages
+      });
 
-    privateMessages.push(privateMsg);
-    
-    // Keep only recent private messages
-    if (privateMessages.length > maxMessageHistory * 2) {
-      privateMessages.shift();
+      const privateMsg = {
+        id: savedMessage._id,
+        from: user.email,
+        to: toEmail,  
+        message: sanitized,
+        timestamp: savedMessage.createdAt.getTime()
+      };
+
+      console.log(`💾 Saved private message to MongoDB from ${user.email} to ${toEmail}`);
+
+      io.to(targetSocketId).emit("private message", privateMsg);
+      socket.emit("private message", privateMsg);
+      user.lastSeen = Date.now();
+    } catch (error) {
+      console.error("Error saving private message:", error);
+      socket.emit("error", "Failed to send private message");
     }
-
-    io.to(targetSocketId).emit("private message", privateMsg);
-    socket.emit("private message", privateMsg);
     user.lastSeen = Date.now();
   });
 
@@ -265,6 +295,9 @@ emailToSocketId.set(email, socket.id);
   });
 
   socket.on("edit message", ({ messageId, newText, isPrivate }) => {
+    // TODO: Migrate to MongoDB - temporarily disabled
+    socket.emit("error", "Message editing temporarily disabled during database migration");
+    /*
     const user = users.get(socket.id);
     if (!user) return;
 
@@ -296,10 +329,14 @@ emailToSocketId.set(email, socket.id);
         io.emit("message edited", message);
       }
     }
+    */
   });
 
   // Handle message deletion (for public messages)
   socket.on("delete message", (messageId: string) => {
+    // TODO: Migrate to MongoDB - temporarily disabled
+    socket.emit("error", "Message deletion temporarily disabled during database migration");
+    /*
     const user = users.get(socket.id);
     if (!user) return;
 
@@ -308,6 +345,7 @@ emailToSocketId.set(email, socket.id);
       publicMessages.splice(messageIndex, 1);
       io.emit("message deleted", messageId);
     }
+    */
   });
 
   // Handle user activity updates
@@ -320,6 +358,9 @@ emailToSocketId.set(email, socket.id);
 
   // Handle message reactions
   socket.on("toggle reaction", ({ messageId, emoji, userId, isPrivate }) => {
+    // TODO: Migrate to MongoDB - temporarily disabled
+    socket.emit("error", "Message reactions temporarily disabled during database migration");
+    /*
     console.log(`Reaction received - MessageId: ${messageId}, Emoji: ${emoji}, UserId: ${userId}, IsPrivate: ${isPrivate}`);
     
     const user = users.get(socket.id);
@@ -390,6 +431,7 @@ emailToSocketId.set(email, socket.id);
         console.log(`Public message not found for reaction: ${messageId}`);
       }
     }
+    */
   });
 });
 
@@ -414,7 +456,24 @@ app.get("*", (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-  console.log(`✅ Server running at http://localhost:${PORT}`);
-  console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-});
+
+// Connect to MongoDB and start server
+const startServer = async () => {
+  try {
+    // Connect to MongoDB Atlas
+    await connectDB();
+    
+    // Start the server
+    server.listen(PORT, () => {
+      console.log(`✅ Server running at http://localhost:${PORT}`);
+      console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+      console.log(`Database: Connected to MongoDB Atlas`);
+    });
+  } catch (error) {
+    console.error('❌ Failed to start server:', error);
+    process.exit(1);
+  }
+};
+
+// Start the server
+startServer();

@@ -1,7 +1,7 @@
 // src/middleware.ts
 import jwt from 'jsonwebtoken';
 import { Request, Response, NextFunction } from 'express';
-import { findUserById } from './users.js';
+import { UserService } from './services/UserService.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key-change-in-production';
 
@@ -13,7 +13,7 @@ export interface AuthRequest extends Request {
   };
 }
 
-export const authenticateToken = (req: AuthRequest, res: Response, next: NextFunction): void => {
+export const authenticateToken = async (req: AuthRequest, res: Response, next: NextFunction): Promise<void> => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
 
@@ -22,14 +22,11 @@ export const authenticateToken = (req: AuthRequest, res: Response, next: NextFun
     return;
   }
 
-  jwt.verify(token, JWT_SECRET, (err, decoded) => {
-    if (err) {
-      res.status(403).json({ error: 'Invalid or expired token' });
-      return;
-    }
-
-    const payload = decoded as { id: string; email: string };
-    const user = findUserById(payload.id);
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as { id: string; email: string };
+    
+    // Find user in database
+    const user = await UserService.findUserById(decoded.id);
 
     if (!user) {
       res.status(403).json({ error: 'User not found' });
@@ -37,13 +34,16 @@ export const authenticateToken = (req: AuthRequest, res: Response, next: NextFun
     }
 
     req.user = {
-      id: user.id,
+      id: (user._id as string).toString(),
       email: user.email,
       nickname: user.nickname
     };
 
     next();
-  });
+  } catch (error) {
+    res.status(403).json({ error: 'Invalid or expired token' });
+    return;
+  }
 };
 
 export const generateToken = (user: { id: string; email: string }): string => {

@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useCallback } from "react";
 import { io, Socket } from "socket.io-client";
+import Avatar from "./Avatar";
 
 // Emoji picker component
 const EmojiPicker: React.FC<{
@@ -92,6 +93,7 @@ interface User {
   id: string;
   email: string;
   nickname: string; 
+  avatar?: string;
   isTyping?: boolean;
   joinTime: number;
 }
@@ -100,7 +102,8 @@ interface Props {
   user: {  
     id: string;
     email: string; 
-    nickname: string; 
+    nickname: string;
+    avatar?: string;
   };   
 }
 
@@ -207,13 +210,47 @@ const ChatApp: React.FC<Props> = ({ user }) => {
 
   /* ──────────────────────────────── socket lifecycle */
   useEffect(() => {
-    const socket = io({ query: { id: user.id, email: user.email, nickname: user.nickname } }); 
+    const socket = io({ 
+      query: { id: user.id, email: user.email, nickname: user.nickname },
+      // Enable automatic reconnection
+      autoConnect: true,
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionAttempts: 5,
+      timeout: 20000
+    }); 
     socketRef.current = socket;
+    
     socket.on("connect", () => {
+      console.log("🔗 Connected to server");
       setConnectionStatus("connected");
     });
 
-    socket.on("disconnect", () => {
+    socket.on("disconnect", (reason) => {
+      console.log("💔 Disconnected from server:", reason);
+      setConnectionStatus("disconnected");
+    });
+
+    socket.on("connect_error", (error) => {
+      console.error("❌ Connection error:", error);
+      setConnectionStatus("disconnected");
+    });
+
+    socket.on("reconnect", (attemptNumber) => {
+      console.log("🔄 Reconnected after", attemptNumber, "attempts");
+      setConnectionStatus("connected");
+    });
+
+    socket.on("reconnect_attempt", (attemptNumber) => {
+      console.log("🔄 Reconnection attempt", attemptNumber);
+    });
+
+    socket.on("reconnect_error", (error) => {
+      console.error("❌ Reconnection error:", error);
+    });
+
+    socket.on("reconnect_failed", () => {
+      console.error("❌ Failed to reconnect");
       setConnectionStatus("disconnected");
     });
 
@@ -415,7 +452,10 @@ const ChatApp: React.FC<Props> = ({ user }) => {
               }}          
             >
               <div className="flex items-center justify-between">
-                 <span>{user.nickname || user.email}</span>               
+                <div className="flex items-center gap-3">
+                  <Avatar user={user} size="sm" />
+                  <span>{user.nickname || user.email}</span>
+                </div>               
                 <div className="flex items-center gap-1">
                  {typingUsers[user.email] && typingUsers[user.email].includes(myEmail) && (   
                     <span className="text-xs text-accent">typing...</span>
@@ -440,6 +480,15 @@ const ChatApp: React.FC<Props> = ({ user }) => {
               key={m.id}
               className={`flex ${m.sender === myEmail ? "justify-end" : "justify-start"}`} 
             >
+              {/* Show avatar for messages from other users */}
+              {m.sender !== myEmail && (
+                <div className="mr-3 mt-1 flex-shrink-0">
+                  <Avatar 
+                    user={users.find(u => u.email === m.sender) || { id: m.sender, email: m.sender, nickname: m.sender, joinTime: 0 }} 
+                    size="sm" 
+                  />
+                </div>
+              )}
               <div
                 className={`rounded-lg px-4 py-2 max-w-[70%] min-w-0 ${
                   m.sender === myEmail  
