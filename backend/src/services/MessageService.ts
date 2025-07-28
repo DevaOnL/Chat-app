@@ -15,6 +15,19 @@ export class MessageService {
   }
 
   /**
+   * Find message by ID
+   */
+  static async findMessageById(messageId: string): Promise<IMessage | null> {
+    // Validate ObjectId
+    if (!mongoose.Types.ObjectId.isValid(messageId)) {
+      console.log(`❌ Invalid ObjectId for find: ${messageId}`);
+      return null;
+    }
+    
+    return await Message.findById(messageId).exec();
+  }
+
+  /**
    * Get messages for a specific thread (public or private)
    */
   static async getMessagesByThread(thread: string, limit: number = 50): Promise<IMessage[]> {
@@ -79,6 +92,52 @@ export class MessageService {
     
     const result = await Message.deleteOne({ _id: messageId, sender: senderEmail }).exec();
     return result.deletedCount > 0;
+  }
+
+  /**
+   * Toggle reaction on message (add if not present, remove if present)
+   */
+  static async toggleReaction(messageId: string, emoji: string, userEmail: string): Promise<IMessage | null> {
+    // Validate ObjectId
+    if (!mongoose.Types.ObjectId.isValid(messageId)) {
+      console.log(`❌ Invalid ObjectId for toggle reaction: ${messageId}`);
+      return null;
+    }
+
+    const message = await Message.findById(messageId).exec();
+    if (!message) return null;
+
+    // Initialize reactions if not exists
+    if (!message.reactions) {
+      message.reactions = new Map();
+    }
+
+    // Get current reactions for this emoji
+    const currentReactions = message.reactions.get(emoji) || [];
+    
+    // Check if user already reacted
+    const userIndex = currentReactions.indexOf(userEmail);
+    
+    if (userIndex === -1) {
+      // Add reaction
+      currentReactions.push(userEmail);
+      message.reactions.set(emoji, currentReactions);
+      console.log(`➕ Added reaction ${emoji} from ${userEmail} to message ${messageId}`);
+    } else {
+      // Remove reaction
+      currentReactions.splice(userIndex, 1);
+      
+      if (currentReactions.length === 0) {
+        // Remove emoji entirely if no users left
+        message.reactions.delete(emoji);
+      } else {
+        message.reactions.set(emoji, currentReactions);
+      }
+      console.log(`➖ Removed reaction ${emoji} from ${userEmail} to message ${messageId}`);
+    }
+
+    await message.save();
+    return message;
   }
 
   /**

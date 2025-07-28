@@ -395,81 +395,62 @@ emailToSocketId.set(email, socket.id);
   });
 
   // Handle message reactions
-  socket.on("toggle reaction", ({ messageId, emoji, userId, isPrivate }) => {
-    // TODO: Migrate to MongoDB - temporarily disabled
-    socket.emit("error", "Message reactions temporarily disabled during database migration");
-    /*
-    console.log(`Reaction received - MessageId: ${messageId}, Emoji: ${emoji}, UserId: ${userId}, IsPrivate: ${isPrivate}`);
-    
-    const user = users.get(socket.id);
-    if (!user || user.id !== userId) {
-      console.log(`User validation failed - Socket user: ${user?.id}, Provided userId: ${userId}`);
-      return;
-    }
+  socket.on("toggle reaction", async ({ messageId, emoji, userId, isPrivate }) => {
+    try {
+      console.log(`Reaction received - MessageId: ${messageId}, Emoji: ${emoji}, UserId: ${userId}, IsPrivate: ${isPrivate}`);
+      
+      const user = users.get(socket.id);
+      if (!user || user.id !== userId) {
+        console.log(`User validation failed - Socket user: ${user?.id}, Provided userId: ${userId}`);
+        socket.emit("error", "Invalid user for reaction");
+        return;
+      }
 
-    if (isPrivate) {
-      // Handle private message reactions
-      const message = privateMessages.find(m => m.id === messageId);
-      if (message) {
-        console.log(`Found private message for reaction`);
-        if (!message.reactions) message.reactions = {};
-        if (!message.reactions[emoji]) message.reactions[emoji] = [];
-        
-        const userIndex = message.reactions[emoji].indexOf(userId);
-        if (userIndex === -1) {
-          // Add reaction
-          message.reactions[emoji].push(userId);
-          console.log(`Added reaction ${emoji} to private message`);
-        } else {
-          // Remove reaction
-          message.reactions[emoji].splice(userIndex, 1);
-          if (message.reactions[emoji].length === 0) {
-            delete message.reactions[emoji];
-          }
-          console.log(`Removed reaction ${emoji} from private message`);
-        }
+      // Check if user is trying to react to their own message
+      const existingMessage = await MessageService.findMessageById(messageId);
+      if (!existingMessage) {
+        console.log(`Message not found for reaction: ${messageId}`);
+        socket.emit("error", "Message not found");
+        return;
+      }
 
-        // Send to both users in the private conversation
-        const targetSocketId = emailToSocketId.get(message.from === user.email ? message.to : message.from);
-        const reactionUpdate = { messageId, reactions: message.reactions };
+      // Get user email for reaction (using email instead of userId for consistency)
+      const userEmail = user.email;
+
+      // Toggle reaction (add if not present, remove if present)
+      const updatedMessage = await MessageService.toggleReaction(messageId, emoji, userEmail);
+
+      if (!updatedMessage) {
+        socket.emit("error", "Failed to update reaction");
+        return;
+      }
+
+      console.log(`✅ Successfully toggled reaction ${emoji} on message ${messageId}`);
+
+      // Create reaction update object for frontend
+      const reactionUpdate = { 
+        messageId, 
+        reactions: Object.fromEntries(updatedMessage.reactions || new Map())
+      };
+
+      if (isPrivate) {
+        // For private messages, send to both users in the conversation
+        const recipientEmail = updatedMessage.thread; // thread contains recipient email for private messages
+        const recipientSocketId = emailToSocketId.get(recipientEmail);
         
         socket.emit("reaction updated", reactionUpdate);
-        if (targetSocketId) {
-          io.to(targetSocketId).emit("reaction updated", reactionUpdate);
+        if (recipientSocketId) {
+          io.to(recipientSocketId).emit("reaction updated", reactionUpdate);
         }
       } else {
-        console.log(`Private message not found for reaction: ${messageId}`);
+        // For public messages, broadcast to all users
+        console.log(`Broadcasting reaction update:`, reactionUpdate);
+        io.emit("reaction updated", reactionUpdate);
       }
-    } else {
-      // Handle public message reactions
-      const message = publicMessages.find(m => m.id === messageId);
-      if (message) {
-        console.log(`Found public message for reaction`);
-        if (!message.reactions) message.reactions = {};
-        if (!message.reactions[emoji]) message.reactions[emoji] = [];
-        
-        const userIndex = message.reactions[emoji].indexOf(userId);
-        if (userIndex === -1) {
-          // Add reaction
-          message.reactions[emoji].push(userId);
-          console.log(`Added reaction ${emoji} to public message. Reactions:`, message.reactions);
-        } else {
-          // Remove reaction
-          message.reactions[emoji].splice(userIndex, 1);
-          if (message.reactions[emoji].length === 0) {
-            delete message.reactions[emoji];
-          }
-          console.log(`Removed reaction ${emoji} from public message. Reactions:`, message.reactions);
-        }
-
-        // Broadcast to all users
-        console.log(`Broadcasting reaction update:`, { messageId, reactions: message.reactions });
-        io.emit("reaction updated", { messageId, reactions: message.reactions });
-      } else {
-        console.log(`Public message not found for reaction: ${messageId}`);
-      }
+    } catch (error) {
+      console.error('Error handling reaction:', error);
+      socket.emit("error", "Failed to process reaction");
     }
-    */
   });
 });
 
