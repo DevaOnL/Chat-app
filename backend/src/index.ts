@@ -174,7 +174,18 @@ emailToSocketId.set(email, socket.id);
   try {
     const recentMessages = await MessageService.getMessagesByThread("public", 50);
     console.log(`📩 Loading ${recentMessages.length} messages from MongoDB for user: ${email}`);
-    socket.emit("message history", recentMessages);
+    
+    // Transform messages to frontend format
+    const transformedMessages = recentMessages.map(msg => ({
+      id: (msg._id as string).toString(),
+      text: msg.text,
+      sender: msg.sender,
+      timestamp: msg.createdAt.getTime(),
+      edited: msg.edited || false,
+      reactions: Object.fromEntries(msg.reactions || new Map())
+    }));
+    
+    socket.emit("message history", transformedMessages);
   } catch (error) {
     console.error("❌ Error fetching message history:", error);
     socket.emit("message history", []);
@@ -230,7 +241,7 @@ emailToSocketId.set(email, socket.id);
 
       // Broadcast to all connected clients
       io.emit("chat message", {
-        id: message._id,
+        id: (message._id as string).toString(),
         text: message.text,
         sender: message.sender,
         timestamp: message.createdAt.getTime()
@@ -270,7 +281,7 @@ emailToSocketId.set(email, socket.id);
       });
 
       const privateMsg = {
-        id: savedMessage._id,
+        id: (savedMessage._id as string).toString(),
         from: user.email,
         to: toEmail,  
         message: sanitized,

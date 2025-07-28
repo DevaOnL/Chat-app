@@ -1,4 +1,5 @@
 import Message, { IMessage } from '../models/Message.js';
+import mongoose from 'mongoose';
 
 export class MessageService {
   /**
@@ -53,6 +54,12 @@ export class MessageService {
    * Update message text (for editing)
    */
   static async updateMessage(messageId: string, newText: string, senderEmail: string): Promise<IMessage | null> {
+    // Validate ObjectId
+    if (!mongoose.Types.ObjectId.isValid(messageId)) {
+      console.log(`❌ Invalid ObjectId for update: ${messageId}`);
+      return null;
+    }
+    
     return await Message.findOneAndUpdate(
       { _id: messageId, sender: senderEmail }, // Only allow sender to edit
       { text: newText, edited: true },
@@ -64,6 +71,12 @@ export class MessageService {
    * Delete message
    */
   static async deleteMessage(messageId: string, senderEmail: string): Promise<boolean> {
+    // Validate ObjectId
+    if (!mongoose.Types.ObjectId.isValid(messageId)) {
+      console.log(`❌ Invalid ObjectId for delete: ${messageId}`);
+      return false;
+    }
+    
     const result = await Message.deleteOne({ _id: messageId, sender: senderEmail }).exec();
     return result.deletedCount > 0;
   }
