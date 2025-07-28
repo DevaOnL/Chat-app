@@ -49,7 +49,8 @@ router.post('/signup', async (req: Request, res: Response): Promise<void> => {
       user: {
         id: (user._id as string).toString(),
         email: user.email,
-        nickname: user.nickname
+        nickname: user.nickname,
+        avatar: user.avatar
       }
     });
   } catch (error) {
@@ -92,7 +93,8 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
       user: {
         id: (user._id as string).toString(),
         email: user.email,
-        nickname: user.nickname
+        nickname: user.nickname,
+        avatar: user.avatar
       }
     });
   } catch (error) {
@@ -108,6 +110,63 @@ router.get('/me', (req: AuthRequest, res: Response, next: NextFunction) => {
   res.json({
     user: req.user
   });
+});
+
+// Update user profile (protected route)
+router.put('/profile', (req: AuthRequest, res: Response, next: NextFunction) => {
+  authenticateToken(req, res, next).catch(next);
+}, async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { nickname, email, avatar } = req.body;
+    const userId = req.user?.id;
+
+    if (!userId) {
+      res.status(401).json({ error: 'User not authenticated' });
+      return;
+    }
+
+    // Validation
+    if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      res.status(400).json({ error: 'Invalid email format' });
+      return;
+    }
+
+    if (nickname && (nickname.trim().length === 0 || nickname.length > 50)) {
+      res.status(400).json({ error: 'Nickname must be between 1 and 50 characters' });
+      return;
+    }
+
+    // Prepare updates object
+    const updates: { nickname?: string; email?: string; avatar?: string } = {};
+    if (nickname !== undefined) updates.nickname = nickname.trim();
+    if (email !== undefined) updates.email = email.trim();
+    if (avatar !== undefined) updates.avatar = avatar;
+
+    // Update user profile
+    const updatedUser = await UserService.updateUserProfile(userId, updates);
+
+    if (!updatedUser) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+
+    res.json({
+      message: 'Profile updated successfully',
+      user: {
+        id: (updatedUser._id as string).toString(),
+        email: updatedUser.email,
+        nickname: updatedUser.nickname,
+        avatar: updatedUser.avatar
+      }
+    });
+  } catch (error) {
+    console.error('Profile update error:', error);
+    if (error instanceof Error && error.message === 'Email already exists') {
+      res.status(409).json({ error: 'Email already exists' });
+    } else {
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  }
 });
 
 export default router;

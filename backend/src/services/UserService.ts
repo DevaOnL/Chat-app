@@ -73,6 +73,56 @@ export class UserService {
   }
 
   /**
+   * Update user email
+   */
+  static async updateUserEmail(id: string, email: string): Promise<IUser | null> {
+    // Check if email is already taken by another user
+    const existingUser = await User.findOne({ 
+      email: email.toLowerCase(), 
+      _id: { $ne: id } 
+    }).exec();
+    
+    if (existingUser) {
+      throw new Error('Email already exists');
+    }
+
+    return await User.findByIdAndUpdate(
+      id, 
+      { email: email.toLowerCase() }, 
+      { new: true, select: '-password' }
+    ).exec();
+  }
+
+  /**
+   * Update user profile (nickname, email, avatar)
+   */
+  static async updateUserProfile(
+    id: string, 
+    updates: { nickname?: string; email?: string; avatar?: string }
+  ): Promise<IUser | null> {
+    // If updating email, check for uniqueness
+    if (updates.email) {
+      const existingUser = await User.findOne({ 
+        email: updates.email.toLowerCase(), 
+        _id: { $ne: id } 
+      }).exec();
+      
+      if (existingUser) {
+        throw new Error('Email already exists');
+      }
+      
+      // Normalize email
+      updates.email = updates.email.toLowerCase();
+    }
+
+    return await User.findByIdAndUpdate(
+      id, 
+      updates, 
+      { new: true, select: '-password' }
+    ).exec();
+  }
+
+  /**
    * Update last seen timestamp
    */
   static async updateLastSeen(id: string): Promise<void> {

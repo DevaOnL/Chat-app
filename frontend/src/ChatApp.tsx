@@ -289,6 +289,7 @@ const ChatApp: React.FC<Props> = ({ user }) => {
     });
 
     socket.on("message edited", (message: Message) => {
+      console.log(`✏️ Received edit confirmation for message: ${message.id}`);
       setThreads(prev => {
         const newThreads = { ...prev };
         for (const thread in newThreads) {
@@ -303,10 +304,12 @@ const ChatApp: React.FC<Props> = ({ user }) => {
     
 
     socket.on("message deleted", (messageId: string) => {
+      console.log(`🗑️ Received delete confirmation for message: ${messageId}`);
       deleteMsg(messageId);
     });
 
     socket.on("error", (error: string) => {
+      console.error('❌ Socket error:', error);
       alert(error); // Replace with proper notification system
     });
 
@@ -354,6 +357,13 @@ const ChatApp: React.FC<Props> = ({ user }) => {
   };
 
   const handleEditMessage = (messageId: string, currentText: string) => {
+    // Close any existing edit first
+    if (editingMessage) {
+      setEditingMessage(null);
+      setEditText("");
+    }
+    
+    // Start editing the new message
     setEditingMessage(messageId);
     setEditText(currentText);
   };
@@ -361,12 +371,13 @@ const ChatApp: React.FC<Props> = ({ user }) => {
   const saveEdit = () => {
     if (editingMessage && editText.trim()) {
       const isPrivate = selected !== "public";
+      console.log(`🔄 Sending edit request for message: ${editingMessage}`);
       socketRef.current?.emit("edit message", { 
         messageId: editingMessage, 
         newText: editText, 
         isPrivate 
       });
-      updateMsg(editingMessage, editText);
+      // Don't update local state immediately - wait for server confirmation
     }
     setEditingMessage(null);
     setEditText("");
@@ -379,8 +390,9 @@ const ChatApp: React.FC<Props> = ({ user }) => {
 
   const handleDeleteMessage = (messageId: string) => {
     if (confirm("Are you sure you want to delete this message?")) {
+      console.log(`🗑️ Sending delete request for message: ${messageId}`);
       socketRef.current?.emit("delete message", messageId);
-      deleteMsg(messageId);
+      // Don't delete from local state immediately - wait for server confirmation
     }
   };
 

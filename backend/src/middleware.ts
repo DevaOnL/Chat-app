@@ -10,6 +10,7 @@ export interface AuthRequest extends Request {
     id: string;
     email: string;
     nickname?: string;
+    avatar?: string;
   };
 }
 
@@ -36,7 +37,8 @@ export const authenticateToken = async (req: AuthRequest, res: Response, next: N
     req.user = {
       id: (user._id as string).toString(),
       email: user.email,
-      nickname: user.nickname
+      nickname: user.nickname,
+      avatar: user.avatar
     };
 
     next();

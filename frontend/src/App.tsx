@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import ChatApp from "./ChatApp";
 import AuthForm from "./AuthForm";
 import ThemeToggle from "./themestoggle";
+import Settings from "./Settings";
 import { applyTheme, getInitialTheme } from "./themeUtils";
 
 interface User {
@@ -15,6 +16,7 @@ const App: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [showSettings, setShowSettings] = useState<boolean>(false);
 
   // Check if user is already authenticated on app load
   useEffect(() => {
@@ -70,6 +72,12 @@ const App: React.FC = () => {
     localStorage.removeItem('user');
     setUser(null);
     setIsAuthenticated(false);
+    setShowSettings(false);
+  };
+
+  // Handle user profile update
+  const handleUserUpdate = (updatedUser: User) => {
+    setUser(updatedUser);
   };
 
   // Show loading spinner while checking authentication
@@ -100,6 +108,12 @@ const App: React.FC = () => {
           <div className="flex items-center gap-2 text-sm">
             <span>Welcome, {user?.nickname || user?.email}</span>
             <button
+              onClick={() => setShowSettings(true)}
+              className="text-accent hover:underline"
+            >
+              Settings
+            </button>
+            <button
               onClick={handleLogout}
               className="text-accent hover:underline"
             >
@@ -116,6 +130,15 @@ const App: React.FC = () => {
       <main className="flex flex-1 overflow-hidden">
         {user && <ChatApp user={user} />} 
       </main>
+
+      {/* Settings Modal */}
+      {showSettings && user && (
+        <Settings
+          user={user}
+          onClose={() => setShowSettings(false)}
+          onUserUpdate={handleUserUpdate}
+        />
+      )}
     </div>
   );
 };

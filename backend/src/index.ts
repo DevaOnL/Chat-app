@@ -294,58 +294,85 @@ emailToSocketId.set(email, socket.id);
     broadcastTypingStatus(socket.id, isTyping, thread);
   });
 
-  socket.on("edit message", ({ messageId, newText, isPrivate }) => {
-    // TODO: Migrate to MongoDB - temporarily disabled
-    socket.emit("error", "Message editing temporarily disabled during database migration");
-    /*
-    const user = users.get(socket.id);
-    if (!user) return;
+  socket.on("edit message", async ({ messageId, newText, isPrivate }) => {
+    try {
+      const user = users.get(socket.id);
+      if (!user) {
+        console.log('Edit failed: User not found');
+        return;
+      }
 
-    if (isPrivate) {
-      const message = privateMessages.find(m => m.id === messageId && m.from === user.email);
-      if (message) {
-        message.message = sanitizeMessage(newText);
-        (message as any).edited = true;
+      const sanitizedText = sanitizeMessage(newText);
+      console.log(`Attempting to edit message ${messageId} by user ${user.email}`);
+      
+      // Update message in database
+      const updatedMessage = await MessageService.updateMessage(messageId, sanitizedText, user.email);
+      
+      if (!updatedMessage) {
+        console.log(`Edit failed: Message ${messageId} not found or no permission`);
+        socket.emit("error", "Message not found or you don't have permission to edit it");
+        return;
+      }
 
-        const editedMsgForFrontend = {
-          id: message.id,
-          text: message.message,
-          sender: message.from,
-          timestamp: message.timestamp,
-          edited: true,
-        };
+      console.log(`✅ Successfully edited message ${messageId}`);
 
-        const targetSocketId = emailToSocketId.get(message.to);
-        if (targetSocketId) {
-          io.to(targetSocketId).emit("message edited", editedMsgForFrontend);
+      // Create message object for frontend
+      const editedMsgForFrontend = {
+        id: (updatedMessage._id as string).toString(),
+        text: updatedMessage.text,
+        sender: updatedMessage.sender,
+        timestamp: updatedMessage.createdAt,
+        edited: true,
+        reactions: Object.fromEntries(updatedMessage.reactions || new Map())
+      };
+
+      if (isPrivate) {
+        // For private messages, send to both sender and recipient
+        const recipientSocketId = emailToSocketId.get(updatedMessage.thread);
+        if (recipientSocketId) {
+          io.to(recipientSocketId).emit("message edited", editedMsgForFrontend);
         }
         socket.emit("message edited", editedMsgForFrontend);
+      } else {
+        // For public messages, broadcast to all
+        io.emit("message edited", editedMsgForFrontend);
       }
-    } else {
-      const message = publicMessages.find(m => m.id === messageId && m.sender === user.email);
-      if (message) {
-        message.text = sanitizeMessage(newText);
-        message.edited = true;
-        io.emit("message edited", message);
-      }
+    } catch (error) {
+      console.error('Error editing message:', error);
+      socket.emit("error", "Failed to edit message");
     }
-    */
   });
 
-  // Handle message deletion (for public messages)
-  socket.on("delete message", (messageId: string) => {
-    // TODO: Migrate to MongoDB - temporarily disabled
-    socket.emit("error", "Message deletion temporarily disabled during database migration");
-    /*
-    const user = users.get(socket.id);
-    if (!user) return;
+  // Handle message deletion
+  socket.on("delete message", async (messageId: string) => {
+    try {
+      const user = users.get(socket.id);
+      if (!user) {
+        console.log('Delete failed: User not found');
+        return;
+      }
 
-    const messageIndex = publicMessages.findIndex(m => m.id === messageId && m.sender === user.email);
-    if (messageIndex !== -1) {
-      publicMessages.splice(messageIndex, 1);
+      console.log(`Attempting to delete message ${messageId} by user ${user.email}`);
+
+      // Delete message from database
+      const wasDeleted = await MessageService.deleteMessage(messageId, user.email);
+      
+      if (!wasDeleted) {
+        console.log(`Delete failed: Message ${messageId} not found or no permission`);
+        socket.emit("error", "Message not found or you don't have permission to delete it");
+        return;
+      }
+
+      console.log(`✅ Successfully deleted message ${messageId}`);
+
+      // Broadcast deletion to all connected users
+      // For both public and private messages, we broadcast to everyone
+      // The frontend will filter based on which messages they can see
       io.emit("message deleted", messageId);
+    } catch (error) {
+      console.error('Error deleting message:', error);
+      socket.emit("error", "Failed to delete message");
     }
-    */
   });
 
   // Handle user activity updates
