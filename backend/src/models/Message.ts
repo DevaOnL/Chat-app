@@ -71,4 +71,16 @@ MessageSchema.index({ thread: 1, createdAt: -1 });
 // Index for finding messages by sender
 MessageSchema.index({ sender: 1 });
 
+// Text search index for message content and file names
+MessageSchema.index({ 
+  text: 'text', 
+  'file.fileName': 'text' 
+}, {
+  name: 'message_search_index',
+  weights: {
+    text: 10,          // Higher weight for message text
+    'file.fileName': 5  // Lower weight for file names
+  }
+});
+
 export default mongoose.model<IMessage>('Message', MessageSchema);

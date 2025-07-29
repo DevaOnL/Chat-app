@@ -197,6 +197,130 @@ export class MessageService {
   }
 
   /**
+   * Search messages with text search, filters, and pagination
+   */
+  static async searchMessages(options: {
+    query?: string;
+    thread?: string;
+    sender?: string;
+    startDate?: Date;
+    endDate?: Date;
+    fileType?: string;
+    limit?: number;
+    skip?: number;
+  }): Promise<{
+    messages: IMessage[];
+    total: number;
+    hasMore: boolean;
+  }> {
+    const {
+      query,
+      thread,
+      sender,
+      startDate,
+      endDate,
+      fileType,
+      limit = 20,
+      skip = 0
+    } = options;
+
+    // Build the search filter
+    const filter: any = {};
+
+    // Text search
+    if (query && query.trim()) {
+      filter.$text = { $search: query.trim() };
+    }
+
+    // Thread filter
+    if (thread) {
+      filter.thread = thread;
+    }
+
+    // Sender filter
+    if (sender) {
+      filter.sender = sender;
+    }
+
+    // Date range filter
+    if (startDate || endDate) {
+      filter.createdAt = {};
+      if (startDate) filter.createdAt.$gte = startDate;
+      if (endDate) filter.createdAt.$lte = endDate;
+    }
+
+    // File type filter
+    if (fileType) {
+      if (fileType === 'text') {
+        filter.file = { $exists: false };
+      } else {
+        filter['file.fileType'] = new RegExp(fileType, 'i');
+      }
+    }
+
+    // Get total count for pagination
+    const total = await Message.countDocuments(filter).exec();
+
+    // Build the query
+    let mongoQuery = Message.find(filter);
+
+    // Sort by relevance if text search, otherwise by date
+    if (query && query.trim()) {
+      mongoQuery = mongoQuery.sort({ score: { $meta: 'textScore' }, createdAt: -1 });
+    } else {
+      mongoQuery = mongoQuery.sort({ createdAt: -1 });
+    }
+
+    // Apply pagination
+    const messages = await mongoQuery
+      .skip(skip)
+      .limit(limit)
+      .exec();
+
+    return {
+      messages,
+      total,
+      hasMore: skip + limit < total
+    };
+  }
+
+  /**
+   * Get message history with pagination for infinite scroll
+   */
+  static async getMessageHistory(options: {
+    thread?: string;
+    beforeDate?: Date;
+    limit?: number;
+  }): Promise<{
+    messages: IMessage[];
+    hasMore: boolean;
+  }> {
+    const { thread = 'public', beforeDate, limit = 50 } = options;
+
+    const filter: any = { thread };
+    
+    if (beforeDate) {
+      filter.createdAt = { $lt: beforeDate };
+    }
+
+    const messages = await Message.find(filter)
+      .sort({ createdAt: -1 })
+      .limit(limit + 1) // Get one extra to check if there are more
+      .exec();
+
+    const hasMore = messages.length > limit;
+    if (hasMore) {
+      messages.pop(); // Remove the extra message
+    }
+
+    // Return in chronological order
+    return {
+      messages: messages.reverse(),
+      hasMore
+    };
+  }
+
+  /**
    * Clean old messages (for maintenance)
    */
   static async cleanOldMessages(daysOld: number = 30): Promise<number> {

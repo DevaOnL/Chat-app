@@ -1,4 +1,4 @@
-import express from "express";
+import express, { Request, Response, NextFunction } from "express";
 import http from "http";
 import { Server, Socket } from "socket.io";
 import path from "path";
@@ -195,6 +195,74 @@ app.post("/api/upload", authenticateToken, upload.single('file'), async (req: Au
   } catch (error) {
     console.error('File upload error:', error);
     res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Search messages endpoint
+app.get("/api/messages/search", (req: AuthRequest, res: Response, next: NextFunction) => {
+  authenticateToken(req, res, next).catch(next);
+}, async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const {
+      query,
+      thread = 'public',
+      sender,
+      startDate,
+      endDate,
+      fileType,
+      limit = 20,
+      skip = 0
+    } = req.query;
+
+    const searchOptions = {
+      query: query as string,
+      thread: thread as string,
+      sender: sender as string,
+      startDate: startDate ? new Date(startDate as string) : undefined,
+      endDate: endDate ? new Date(endDate as string) : undefined,
+      fileType: fileType as string,
+      limit: parseInt(limit as string, 10),
+      skip: parseInt(skip as string, 10)
+    };
+
+    const results = await MessageService.searchMessages(searchOptions);
+    
+    res.json({
+      success: true,
+      data: results
+    });
+  } catch (error) {
+    console.error('Search error:', error);
+    res.status(500).json({ error: 'Search failed' });
+  }
+});
+
+// Get message history with pagination
+app.get("/api/messages/history", (req: AuthRequest, res: Response, next: NextFunction) => {
+  authenticateToken(req, res, next).catch(next);
+}, async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const {
+      thread = 'public',
+      beforeDate,
+      limit = 50
+    } = req.query;
+
+    const historyOptions = {
+      thread: thread as string,
+      beforeDate: beforeDate ? new Date(beforeDate as string) : undefined,
+      limit: parseInt(limit as string, 10)
+    };
+
+    const results = await MessageService.getMessageHistory(historyOptions);
+    
+    res.json({
+      success: true,
+      data: results
+    });
+  } catch (error) {
+    console.error('History error:', error);
+    res.status(500).json({ error: 'Failed to load message history' });
   }
 });
 

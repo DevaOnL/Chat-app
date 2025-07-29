@@ -112,10 +112,12 @@ interface Props {
     email: string; 
     nickname: string;
     avatar?: string;
-  };   
+  };
+  highlightMessageId?: string;
+  onMessageHighlighted?: () => void;
 }
 
-const ChatApp: React.FC<Props> = ({ user }) => {
+const ChatApp: React.FC<Props> = ({ user, highlightMessageId, onMessageHighlighted }) => {
   const socketRef = useRef<Socket | null>(null);
    const myEmail = user.email;  
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -136,6 +138,7 @@ const ChatApp: React.FC<Props> = ({ user }) => {
   const [editText, setEditText] = useState("");
   const [showEmojiPicker, setShowEmojiPicker] = useState<string | null>(null); // messageId for which picker is shown
   const [showFileUpload, setShowFileUpload] = useState(false);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [isUploadingFile, setIsUploadingFile] = useState(false);
 
   /* ──────────────────────────────── helpers */
@@ -368,6 +371,46 @@ const ChatApp: React.FC<Props> = ({ user }) => {
     }
   }, [threads[selected]?.length, scrollToBottom]);
 
+  /* highlight and scroll to specific message */
+  useEffect(() => {
+    if (highlightMessageId) {
+      // Find the message in all threads to determine which thread to switch to
+      let targetThread = selected;
+      for (const [threadName, messages] of Object.entries(threads)) {
+        if (messages.some(msg => msg.id === highlightMessageId)) {
+          targetThread = threadName;
+          break;
+        }
+      }
+
+      // Switch to the thread containing the message
+      if (targetThread !== selected) {
+        setSelected(targetThread);
+      }
+
+      // Wait a bit for the thread switch to complete, then scroll to message
+      setTimeout(() => {
+        const messageElement = document.getElementById(`message-${highlightMessageId}`);
+        if (messageElement) {
+          // Scroll to the message
+          messageElement.scrollIntoView({ 
+            behavior: 'smooth', 
+            block: 'center' 
+          });
+          
+          // Highlight the message
+          setHighlightedMessageId(highlightMessageId);
+          
+          // Remove highlight after 3 seconds
+          setTimeout(() => {
+            setHighlightedMessageId(null);
+            onMessageHighlighted?.();
+          }, 3000);
+        }
+      }, targetThread !== selected ? 500 : 100);
+    }
+  }, [highlightMessageId, threads, selected, onMessageHighlighted]);
+
   /* ──────────────────────────────── send */
   const send = (e: React.FormEvent) => {
     e.preventDefault();
@@ -595,7 +638,12 @@ const ChatApp: React.FC<Props> = ({ user }) => {
           {msgs.map((m) => (
             <div
               key={m.id}
-              className={`flex ${m.sender === myEmail ? "justify-end" : "justify-start"}`} 
+              id={`message-${m.id}`}
+              className={`flex ${m.sender === myEmail ? "justify-end" : "justify-start"} transition-all duration-300 ${
+                highlightedMessageId === m.id 
+                  ? 'bg-yellow-200 dark:bg-yellow-800 bg-opacity-50 rounded-lg p-2 -m-2' 
+                  : ''
+              }`} 
             >
               {/* Show avatar for messages from other users */}
               {m.sender !== myEmail && (

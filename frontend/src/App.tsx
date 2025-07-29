@@ -4,6 +4,8 @@ import AuthForm from "./AuthForm";
 import ThemeToggle from "./themestoggle";
 import Settings from "./Settings";
 import Avatar from "./Avatar";
+import MessageSearch from "./MessageSearch";
+import { SearchIcon } from "./Icons";
 import { applyTheme, getInitialTheme } from "./themeUtils";
 
 interface User {
@@ -18,6 +20,8 @@ const App: React.FC = () => {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [showSettings, setShowSettings] = useState<boolean>(false);
+  const [showSearch, setShowSearch] = useState<boolean>(false);
+  const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
 
   // Check if user is already authenticated on app load
   useEffect(() => {
@@ -81,6 +85,17 @@ const App: React.FC = () => {
     setUser(updatedUser);
   };
 
+  const handleMessageSelect = (messageId: string) => {
+    // Close search and highlight the selected message
+    setShowSearch(false);
+    setSelectedMessageId(messageId);
+  };
+
+  const handleMessageHighlighted = () => {
+    // Clear the selected message after highlighting is done
+    setSelectedMessageId(null);
+  };
+
   // Show loading spinner while checking authentication
   if (isLoading) {
     return (
@@ -117,8 +132,15 @@ const App: React.FC = () => {
               <span>{user?.nickname || user?.email}</span>
             </div>
             <button
+              onClick={() => setShowSearch(true)}
+              className="text-accent hover:text-accentFore flex items-center gap-1 p-2 hover:bg-panelAlt rounded-lg transition-colors"
+              title="Search Messages"
+            >
+              <SearchIcon className="w-4 h-4" />
+            </button>
+            <button
               onClick={() => setShowSettings(true)}
-              className="text-accent hover:underline flex items-center gap-1"
+              className="text-accent hover:text-accentFore flex items-center gap-1 p-2 hover:bg-panelAlt rounded-lg transition-colors"
               title="Settings"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -141,7 +163,13 @@ const App: React.FC = () => {
       </header>
 
       <main className="flex flex-1 overflow-hidden">
-        {user && <ChatApp user={user} />} 
+        {user && (
+          <ChatApp 
+            user={user} 
+            highlightMessageId={selectedMessageId || undefined}
+            onMessageHighlighted={handleMessageHighlighted}
+          />
+        )} 
       </main>
 
       {/* Settings Modal */}
@@ -150,6 +178,15 @@ const App: React.FC = () => {
           user={user}
           onClose={() => setShowSettings(false)}
           onUserUpdate={handleUserUpdate}
+        />
+      )}
+
+      {/* Search Modal */}
+      {showSearch && (
+        <MessageSearch
+          isOpen={showSearch}
+          onClose={() => setShowSearch(false)}
+          onMessageSelect={handleMessageSelect}
         />
       )}
     </div>
