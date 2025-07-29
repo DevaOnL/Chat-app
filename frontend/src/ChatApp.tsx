@@ -358,6 +358,49 @@ const ChatApp: React.FC<Props> = ({ user, highlightMessageId, onMessageHighlight
     }
   }, [highlightMessageId, threads, selected, onMessageHighlighted]);
 
+  /* Auto-focus input when typing anywhere */
+  useEffect(() => {
+    const handleGlobalKeydown = (e: KeyboardEvent) => {
+      // Don't trigger if user is already typing in an input/textarea/contenteditable
+      const target = e.target as HTMLElement;
+      if (
+        target.tagName === 'INPUT' ||
+        target.tagName === 'TEXTAREA' ||
+        target.contentEditable === 'true' ||
+        target.closest('[contenteditable="true"]')
+      ) {
+        return;
+      }
+
+      // Don't trigger for special keys
+      if (
+        e.ctrlKey ||
+        e.altKey ||
+        e.metaKey ||
+        e.key === 'Escape' ||
+        e.key === 'Tab' ||
+        e.key === 'Enter' ||
+        e.key === 'Backspace' ||
+        e.key === 'Delete' ||
+        e.key.startsWith('Arrow') ||
+        e.key.startsWith('F')
+      ) {
+        return;
+      }
+
+      // Only trigger for printable characters
+      if (e.key.length === 1 && inputRef.current) {
+        e.preventDefault();
+        inputRef.current.focus();
+        // Add the typed character to the input
+        setInput(prev => prev + e.key);
+      }
+    };
+
+    document.addEventListener('keydown', handleGlobalKeydown);
+    return () => document.removeEventListener('keydown', handleGlobalKeydown);
+  }, []);
+
   /* ──────────────────────────────── send */
   const send = (e: React.FormEvent) => {
     e.preventDefault();

@@ -135,7 +135,6 @@ export const EnhancedEmojiPicker: React.FC<EnhancedEmojiPickerProps> = ({
   const [search, setSearch] = useState('');
   const [selectedCategory, setSelectedCategory] = useState(0);
   const pickerRef = useRef<HTMLDivElement>(null);
-  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const categories: EmojiCategory[] = [
     {
