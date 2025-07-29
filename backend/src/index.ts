@@ -214,6 +214,8 @@ app.get("/api/messages/search", (req: AuthRequest, res: Response, next: NextFunc
       skip = 0
     } = req.query;
 
+    console.log(`🔍 Search request - Query: "${query}", Thread: ${thread}, Sender: ${sender}, Limit: ${limit}, Skip: ${skip}`);
+
     const searchOptions = {
       query: query as string,
       thread: thread as string,
@@ -226,6 +228,8 @@ app.get("/api/messages/search", (req: AuthRequest, res: Response, next: NextFunc
     };
 
     const results = await MessageService.searchMessages(searchOptions);
+    
+    console.log(`📊 Search results - Found: ${results.total} messages, Returned: ${results.messages.length}`);
     
     res.json({
       success: true,
