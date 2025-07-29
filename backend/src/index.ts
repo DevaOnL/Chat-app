@@ -77,6 +77,7 @@ interface PrivateMessage {
 
 const users = new Map<string, User>(); // socket.id -> User  
 const emailToSocketId = new Map<string, string>(); // email -> socket.id 
+const userSessions = new Map<string, Set<string>>(); // email -> Set of socket.ids (for multiple tabs)
 // Note: Messages are now stored in MongoDB, not in memory
 const maxMessageHistory = 100;
 
@@ -111,7 +112,17 @@ function isRateLimited(socketId: string): boolean {
 }
 
 function broadcastUserList() {
-  const userList = Array.from(users.values()).map(user => ({
+  // Get unique users (one per email, using the most recent session)
+  const uniqueUsers = new Map<string, User>();
+  
+  for (const [socketId, user] of users.entries()) {
+    const existingUser = uniqueUsers.get(user.email);
+    if (!existingUser || user.joinTime > existingUser.joinTime) {
+      uniqueUsers.set(user.email, user);
+    }
+  }
+  
+  const userList = Array.from(uniqueUsers.values()).map(user => ({
     id: user.id,
     email: user.email,  
     nickname: user.nickname,
@@ -281,10 +292,32 @@ app.get("/health", (req, res) => {
 
 // Socket.IO connection handling
 io.on("connection", async (socket: Socket) => {
-  const { email, nickname, id } = socket.handshake.query; if (typeof id !== 'string' || typeof email !== 'string' || typeof nickname !== 'string') {                                                                                 
+  const { email, nickname, id } = socket.handshake.query; 
+  if (typeof id !== 'string' || typeof email !== 'string' || typeof nickname !== 'string') {                                                                                 
     socket.disconnect();                                                                    
     return;                                                                                 
   }  
+
+  // Handle multiple sessions for the same user
+  const existingSocketId = emailToSocketId.get(email);
+  if (existingSocketId && users.has(existingSocketId)) {
+    // Disconnect the previous session
+    const existingSocket = io.sockets.sockets.get(existingSocketId);
+    if (existingSocket) {
+      console.log(`🔄 Disconnecting previous session for ${email} (socket: ${existingSocketId})`);
+      existingSocket.emit("session_replaced", { message: "Account logged in from another location" });
+      existingSocket.disconnect(true);
+    }
+    // Clean up old session data
+    users.delete(existingSocketId);
+  }
+
+  // Add user sessions tracking
+  if (!userSessions.has(email)) {
+    userSessions.set(email, new Set());
+  }
+  userSessions.get(email)!.add(socket.id);
+
   const user: User = {
     id, 
     email,
@@ -294,7 +327,10 @@ io.on("connection", async (socket: Socket) => {
   };
 
   users.set(socket.id, user);
-emailToSocketId.set(email, socket.id); 
+  emailToSocketId.set(email, socket.id); 
+  
+  console.log(`✅ User connected: ${email} (socket: ${socket.id})`);
+  
   // Send initial data
 
   // Send recent public messages from database
@@ -335,11 +371,30 @@ emailToSocketId.set(email, socket.id);
   socket.on("disconnect", () => {
     const user = users.get(socket.id);
     if (user) {
-      emailToSocketId.delete(user.email); 
+      // Remove this socket from user sessions
+      const sessions = userSessions.get(user.email);
+      if (sessions) {
+        sessions.delete(socket.id);
+        // If no more sessions for this user, clean up completely
+        if (sessions.size === 0) {
+          userSessions.delete(user.email);
+          emailToSocketId.delete(user.email);
+        } else {
+          // Update emailToSocketId to point to another active session
+          const remainingSocket = Array.from(sessions)[0];
+          if (remainingSocket) {
+            emailToSocketId.set(user.email, remainingSocket);
+          }
+        }
+      } else {
+        // Fallback cleanup
+        emailToSocketId.delete(user.email);
+      }
+      
       users.delete(socket.id);
       messageLimiter.delete(socket.id);
       broadcastUserList();
-      console.log(`User disconnected: ${user.nickname} (${user.email})`);  
+      console.log(`👋 User disconnected: ${user.nickname} (${user.email}, socket: ${socket.id})`);  
     }
   });
 

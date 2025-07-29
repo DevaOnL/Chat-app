@@ -209,6 +209,13 @@ const ChatApp: React.FC<Props> = ({ user, highlightMessageId, onMessageHighlight
       setConnectionStatus("disconnected");
     });
 
+    socket.on("session_replaced", (data) => {
+      console.log("🔄 Session replaced:", data.message);
+      alert("Your account has been logged in from another location. This session will be disconnected.");
+      // Optionally redirect to login or handle gracefully
+      window.location.reload();
+    });
+
     socket.on("connect_error", (error) => {
       console.error("❌ Connection error:", error);
       setConnectionStatus("disconnected");
