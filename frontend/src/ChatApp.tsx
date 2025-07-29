@@ -3,60 +3,7 @@ import { io, Socket } from "socket.io-client";
 import Avatar from "./Avatar";
 import FileUpload from "./FileUpload";
 import FileMessage from "./FileMessage";
-
-// Emoji picker component
-const EmojiPicker: React.FC<{
-  onEmojiSelect: (emoji: string) => void;
-  onClose: () => void;
-}> = ({ onEmojiSelect, onClose }) => {
-  const pickerRef = useRef<HTMLDivElement>(null);
-  
-  const emojis = [
-    '👍', '👎', '❤️', '😂', '😮', '😢', '😡', '👏',
-    '🎉', '🔥', '⭐', '💯', '🚀', '💡', '✅', '❌',
-    '🤔', '😊', '😍', '🤩', '👀', '🙏'
-  ];
-
-  useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (pickerRef.current && !pickerRef.current.contains(event.target as Node)) {
-        onClose();
-      }
-    };
-
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, [onClose]);
-
-  return (
-    <div 
-      ref={pickerRef}
-      className="fixed bg-panel border border-border rounded-lg shadow-lg p-4 z-50 w-[300px]"
-      style={{
-        bottom: '60px',
-        left: '50%',
-        transform: 'translateX(-50%)',
-        maxHeight: '300px'
-      }}
-    >
-      <div className="grid grid-cols-6 gap-2">
-        {emojis.map((emoji) => (
-          <button
-            key={emoji}
-            onClick={() => {
-              onEmojiSelect(emoji);
-              onClose();
-            }}
-            className="text-2xl p-3 rounded-lg hover:bg-panelAlt transition-colors flex items-center justify-center min-h-[48px]"
-            title={`React with ${emoji}`}
-          >
-            {emoji}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-};
+import { ReactionBar, QuickReactions } from "./EnhancedReactions";
 
 // Component for handling long messages with expand/collapse
 const MessageContent: React.FC<{ text: string }> = ({ text }) => {
@@ -639,7 +586,7 @@ const ChatApp: React.FC<Props> = ({ user, highlightMessageId, onMessageHighlight
             <div
               key={m.id}
               id={`message-${m.id}`}
-              className={`flex ${m.sender === myEmail ? "justify-end" : "justify-start"} transition-all duration-300 ${
+              className={`flex ${m.sender === myEmail ? "justify-end" : "justify-start"} transition-all duration-300 group relative ${
                 highlightedMessageId === m.id 
                   ? 'bg-yellow-200 dark:bg-yellow-800 bg-opacity-50 rounded-lg p-2 -m-2' 
                   : ''
@@ -654,13 +601,23 @@ const ChatApp: React.FC<Props> = ({ user, highlightMessageId, onMessageHighlight
                   />
                 </div>
               )}
+              
               <div
-                className={`rounded-lg px-4 py-2 max-w-[70%] min-w-0 ${
+                className={`rounded-lg px-4 py-2 max-w-[70%] min-w-0 relative ${
                   m.sender === myEmail  
                     ? "bg-accent text-accentFore"
                     : "bg-panelAlt text-fg border border-border"
                 }`}
               >
+                {/* Quick reactions positioned absolutely on hover */}
+                <div className={`absolute ${m.sender === myEmail ? 'right-full mr-2' : 'left-full ml-2'} top-0 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none group-hover:pointer-events-auto`}>
+                  <QuickReactions
+                    onReact={(emoji) => handleReaction(m.id, emoji)}
+                    messageId={m.id}
+                    existingReactions={m.reactions}
+                    currentUserId={user.id}
+                  />
+                </div>
                 {editingMessage === m.id ? (
                   <div className="space-y-2">
                     <input
@@ -700,47 +657,16 @@ const ChatApp: React.FC<Props> = ({ user, highlightMessageId, onMessageHighlight
                     
                     {m.edited && <div className="text-xs opacity-70 mt-1">edited</div>}
                     
-                    {/* Display reactions */}
-                    {m.reactions && Object.keys(m.reactions).length > 0 && (
-                      <div className="flex flex-wrap gap-1 mt-2">
-                        {Object.entries(m.reactions).map(([emoji, userIds]) => (
-                          <button
-                            key={emoji}
-                            onClick={() => handleReaction(m.id, emoji)}
-                            className={`text-xs px-2 py-1 rounded-full border transition-colors ${
-                              userIds.includes(user.id)
-                                ? 'bg-accent text-accentFore border-accent'
-                                : 'bg-panel border-border hover:bg-panelAlt'
-                            }`}
-                          >
-                            {emoji} {userIds.length}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                    
-                    {/* Reaction buttons */}
-                    <div className="flex gap-2 mt-2 items-center relative">
-                      {/* Add reaction button */}
-                      <button
-                        onClick={() => setShowEmojiPicker(showEmojiPicker === m.id ? null : m.id)}
-                        className="text-xs px-3 py-1 rounded border border-border hover:bg-panelAlt transition-colors flex items-center gap-1"
-                        title="Add reaction"
-                      >
-                        <span>😊</span>
-                        <span>React</span>
-                      </button>
-                    </div>
-                    
-                    {/* Emoji picker - positioned to avoid overflow */}
-                    {showEmojiPicker === m.id && (
-                      <div className="relative">
-                        <EmojiPicker
-                          onEmojiSelect={(emoji) => handleReaction(m.id, emoji)}
-                          onClose={() => setShowEmojiPicker(null)}
-                        />
-                      </div>
-                    )}
+                    {/* Enhanced Reaction System */}
+                    <ReactionBar
+                      reactions={m.reactions || {}}
+                      users={users}
+                      currentUserId={user.id}
+                      onToggleReaction={(emoji) => handleReaction(m.id, emoji)}
+                      onShowEmojiPicker={() => setShowEmojiPicker(showEmojiPicker === m.id ? null : m.id)}
+                      showEmojiPicker={showEmojiPicker === m.id}
+                      onCloseEmojiPicker={() => setShowEmojiPicker(null)}
+                    />
                     
                    {m.sender === myEmail && (            
                       <div className="flex gap-2 mt-2">
