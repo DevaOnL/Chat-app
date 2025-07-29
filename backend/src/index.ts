@@ -112,23 +112,42 @@ function isRateLimited(socketId: string): boolean {
 }
 
 function broadcastUserList() {
-  // Get unique users (one per email, using the most recent session)
-  const uniqueUsers = new Map<string, User>();
+  // Get unique users (deduplicate by both email AND user ID, using the most recent session)
+  const uniqueUsersByEmail = new Map<string, User>();
+  const uniqueUsersById = new Map<string, User>();
   
   for (const [socketId, user] of users.entries()) {
-    const existingUser = uniqueUsers.get(user.email);
-    if (!existingUser || user.joinTime > existingUser.joinTime) {
-      uniqueUsers.set(user.email, user);
+    // Deduplicate by email (existing logic)
+    const existingUserByEmail = uniqueUsersByEmail.get(user.email);
+    if (!existingUserByEmail || user.joinTime > existingUserByEmail.joinTime) {
+      uniqueUsersByEmail.set(user.email, user);
+    }
+    
+    // Also deduplicate by user ID
+    const existingUserById = uniqueUsersById.get(user.id);
+    if (!existingUserById || user.joinTime > existingUserById.joinTime) {
+      uniqueUsersById.set(user.id, user);
     }
   }
   
-  const userList = Array.from(uniqueUsers.values()).map(user => ({
+  // Use the stricter deduplication (by ID) to ensure no duplicate user IDs
+  const userList = Array.from(uniqueUsersById.values()).map(user => ({
     id: user.id,
     email: user.email,  
     nickname: user.nickname,
     isTyping: user.isTyping,
     joinTime: user.joinTime
   }));
+  
+  console.log(`📋 Broadcasting user list: ${userList.length} unique users (${users.size} total connections)`);
+  console.log(`👥 Users: ${userList.map(u => `${u.email} (ID: ${u.id})`).join(', ')}`);
+  
+  // Debug: Check if email and ID deduplication gave different results
+  const emailUniqueCount = uniqueUsersByEmail.size;
+  const idUniqueCount = uniqueUsersById.size;
+  if (emailUniqueCount !== idUniqueCount) {
+    console.warn(`⚠️ Deduplication mismatch: ${emailUniqueCount} unique emails vs ${idUniqueCount} unique IDs`);
+  }
   io.emit("users update", userList);
 }
 
@@ -301,6 +320,15 @@ io.on("connection", async (socket: Socket) => {
   // Handle multiple sessions for the same user
   const existingSocketId = emailToSocketId.get(email);
   if (existingSocketId && users.has(existingSocketId)) {
+    // Clean up old session data first
+    users.delete(existingSocketId);
+    
+    // Remove from user sessions
+    const existingSessions = userSessions.get(email);
+    if (existingSessions) {
+      existingSessions.delete(existingSocketId);
+    }
+    
     // Disconnect the previous session
     const existingSocket = io.sockets.sockets.get(existingSocketId);
     if (existingSocket) {
@@ -308,8 +336,6 @@ io.on("connection", async (socket: Socket) => {
       existingSocket.emit("session_replaced", { message: "Account logged in from another location" });
       existingSocket.disconnect(true);
     }
-    // Clean up old session data
-    users.delete(existingSocketId);
   }
 
   // Add user sessions tracking

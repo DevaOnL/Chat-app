@@ -246,7 +246,20 @@ const ChatApp: React.FC<Props> = ({ user, highlightMessageId, onMessageHighlight
     // });
 
     socket.on("users update", (userList: User[]) => {
-      setUsers(userList.filter(u => u.email !== myEmail));  
+      console.log(`📋 Received user list update: ${userList.length} users`);
+      console.log(`👥 Users: ${userList.map(u => u.email).join(', ')}`);
+      
+      // Filter out current user and deduplicate by user ID
+      const filteredUsers = userList.filter(u => u.email !== myEmail);
+      const uniqueUsers = filteredUsers.filter((user, index, arr) => 
+        arr.findIndex(u => u.id === user.id) === index
+      );
+      
+      if (uniqueUsers.length !== filteredUsers.length) {
+        console.warn(`⚠️ Removed ${filteredUsers.length - uniqueUsers.length} duplicate users from list`);
+      }
+      
+      setUsers(uniqueUsers);  
     });
 
     socket.on("message history", (messages: Message[]) => {
