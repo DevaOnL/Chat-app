@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from "react";
+import React, { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from "react";
 import { io, Socket } from "socket.io-client";
 import Avatar from "./Avatar";
 import FileUpload from "./FileUpload";
@@ -64,7 +64,11 @@ interface Props {
   onMessageHighlighted?: () => void;
 }
 
-const ChatApp: React.FC<Props> = ({ user, highlightMessageId, onMessageHighlighted }) => {
+export interface ChatAppRef {
+  emitProfileUpdate: (userId: string, nickname: string, avatar?: string) => void;
+}
+
+const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMessageHighlighted }, ref) => {
   const socketRef = useRef<Socket | null>(null);
    const myEmail = user.email;  
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -87,11 +91,77 @@ const ChatApp: React.FC<Props> = ({ user, highlightMessageId, onMessageHighlight
   const [showFileUpload, setShowFileUpload] = useState(false);
   const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
   const [isUploadingFile, setIsUploadingFile] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [hasMoreMessages, setHasMoreMessages] = useState(true);
 
   /* ──────────────────────────────── helpers */
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
+
+  const loadMoreMessages = useCallback(async () => {
+    if (isLoadingMore || !hasMoreMessages) return;
+    
+    setIsLoadingMore(true);
+    
+    try {
+      const currentMessages = threads[selected] || [];
+      if (currentMessages.length === 0) {
+        setIsLoadingMore(false);
+        return;
+      }
+      
+      // Get the oldest message timestamp as beforeDate
+      const oldestMessage = currentMessages[0];
+      const beforeDate = new Date(oldestMessage.timestamp).toISOString();
+      
+      const token = localStorage.getItem('token');
+      const response = await fetch(
+        `/api/messages/history?thread=${selected}&beforeDate=${beforeDate}&limit=50`,
+        {
+          headers: {
+            'Authorization': `Bearer ${token}`
+          }
+        }
+      );
+      
+      if (!response.ok) {
+        throw new Error('Failed to load more messages');
+      }
+      
+      const data = await response.json();
+      const olderMessages = data.data.messages;
+      const hasMore = data.data.hasMore;
+      
+      if (olderMessages.length > 0) {
+        // Preserve scroll position
+        const container = messagesContainerRef.current;
+        const scrollHeightBefore = container?.scrollHeight || 0;
+        
+        // Add older messages to the beginning
+        setThreads(prev => ({
+          ...prev,
+          [selected]: [...olderMessages, ...prev[selected]]
+        }));
+        
+        // Restore scroll position after render
+        setTimeout(() => {
+          if (container) {
+            const scrollHeightAfter = container.scrollHeight;
+            const scrollDiff = scrollHeightAfter - scrollHeightBefore;
+            container.scrollTop = container.scrollTop + scrollDiff;
+          }
+        }, 50);
+      }
+      
+      setHasMoreMessages(hasMore);
+    } catch (error) {
+      console.error('Error loading more messages:', error);
+      // No user alert needed for infinite scroll - loading happens automatically
+    } finally {
+      setIsLoadingMore(false);
+    }
+  }, [isLoadingMore, hasMoreMessages, threads, selected]);
 
   const isNearBottom = useCallback(() => {
     const container = messagesContainerRef.current;
@@ -104,7 +174,16 @@ const ChatApp: React.FC<Props> = ({ user, highlightMessageId, onMessageHighlight
 
   const handleScroll = useCallback(() => {
     shouldAutoScrollRef.current = isNearBottom();
-  }, [isNearBottom]);
+    
+    // Check if user scrolled to the top and load more messages
+    const container = messagesContainerRef.current;
+    if (container && selected === "public" && hasMoreMessages && !isLoadingMore) {
+      const threshold = 100; // pixels from top
+      if (container.scrollTop <= threshold) {
+        loadMoreMessages();
+      }
+    }
+  }, [isNearBottom, selected, hasMoreMessages, isLoadingMore, loadMoreMessages]);
 
   const addMsg = useCallback((thread: string, msg: Message) => {
     setThreads(prev => ({
@@ -186,6 +265,25 @@ const ChatApp: React.FC<Props> = ({ user, highlightMessageId, onMessageHighlight
     }
   }, [isTyping, selected]);
 
+  // Function to emit profile updates via socket
+  const emitProfileUpdate = useCallback((userId: string, nickname: string, avatar?: string) => {
+    const socket = socketRef.current;
+    if (socket) {
+      socket.emit('profile updated', {
+        userId,
+        nickname,
+        avatar
+      });
+    } else {
+      console.error('❌ ChatApp: Socket is not connected!');
+    }
+  }, []);
+
+  // Expose methods to parent component
+  useImperativeHandle(ref, () => ({
+    emitProfileUpdate
+  }), [emitProfileUpdate]);
+
   /* ──────────────────────────────── socket lifecycle */
   useEffect(() => {
     const socket = io({ 
@@ -246,9 +344,6 @@ const ChatApp: React.FC<Props> = ({ user, highlightMessageId, onMessageHighlight
     // });
 
     socket.on("users update", (userList: User[]) => {
-      console.log(`📋 Received user list update: ${userList.length} users`);
-      console.log(`👥 Users: ${userList.map(u => u.email).join(', ')}`);
-      
       // Filter out current user and deduplicate by user ID
       const filteredUsers = userList.filter(u => u.email !== myEmail);
       const uniqueUsers = filteredUsers.filter((user, index, arr) => 
@@ -262,8 +357,35 @@ const ChatApp: React.FC<Props> = ({ user, highlightMessageId, onMessageHighlight
       setUsers(uniqueUsers);  
     });
 
+    socket.on("user profile updated", ({ userId, nickname, avatar, email }) => {
+      // Don't update our own user data from socket events to prevent loops
+      if (email === user.email) {
+        console.log("⏩ Skipping self profile update to prevent loops");
+        return;
+      }
+      
+      // Update the user in the users list by email (since messages use email as sender)
+      setUsers(prevUsers => {
+        const updatedUsers = prevUsers.map(u => 
+          u.email === email 
+            ? { ...u, nickname, avatar }
+            : u
+        );
+        
+        // Check if we actually found and updated a user
+        const updatedUser = updatedUsers.find(u => u.email === email);
+        if (!updatedUser) {
+          console.warn(`❌ User with email ${email} not found in users list`);
+        }
+        
+        return updatedUsers;
+      });
+    });
+
     socket.on("message history", (messages: Message[]) => {
       setThreads(prev => ({ ...prev, public: messages }));
+      // Reset pagination state when receiving initial messages
+      setHasMoreMessages(messages.length >= 50); // Assume more if we got a full batch
     });
 
     socket.on("chat message", (message: Message) => {
@@ -287,7 +409,6 @@ const ChatApp: React.FC<Props> = ({ user, highlightMessageId, onMessageHighlight
     });
 
     socket.on("message edited", (message: Message) => {
-      console.log(`✏️ Received edit confirmation for message: ${message.id}`);
       setThreads(prev => {
         const newThreads = { ...prev };
         for (const thread in newThreads) {
@@ -302,7 +423,6 @@ const ChatApp: React.FC<Props> = ({ user, highlightMessageId, onMessageHighlight
     
 
     socket.on("message deleted", (messageId: string) => {
-      console.log(`🗑️ Received delete confirmation for message: ${messageId}`);
       deleteMsg(messageId);
     });
 
@@ -312,7 +432,6 @@ const ChatApp: React.FC<Props> = ({ user, highlightMessageId, onMessageHighlight
     });
 
     socket.on("reaction updated", ({ messageId, reactions }) => {
-      console.log(`Received reaction update - MessageId: ${messageId}, Reactions:`, reactions);
       updateMessageReactions(messageId, reactions);
     });
 
@@ -329,6 +448,13 @@ const ChatApp: React.FC<Props> = ({ user, highlightMessageId, onMessageHighlight
     // Always auto-scroll when switching threads
     shouldAutoScrollRef.current = true;
     scrollToBottom();
+    
+    // Reset pagination state when switching threads
+    if (selected === "public") {
+      setHasMoreMessages(true); // Reset to allow loading more for public chat
+    } else {
+      setHasMoreMessages(false); // Disable for private chats for now
+    }
   }, [selected, scrollToBottom]);
 
   // Auto-scroll only when messages change AND user should auto-scroll
@@ -464,7 +590,6 @@ const ChatApp: React.FC<Props> = ({ user, highlightMessageId, onMessageHighlight
   const saveEdit = () => {
     if (editingMessage && editText.trim()) {
       const isPrivate = selected !== "public";
-      console.log(`🔄 Sending edit request for message: ${editingMessage}`);
       socketRef.current?.emit("edit message", { 
         messageId: editingMessage, 
         newText: editText, 
@@ -483,7 +608,6 @@ const ChatApp: React.FC<Props> = ({ user, highlightMessageId, onMessageHighlight
 
   const handleDeleteMessage = (messageId: string) => {
     if (confirm("Are you sure you want to delete this message?")) {
-      console.log(`🗑️ Sending delete request for message: ${messageId}`);
       socketRef.current?.emit("delete message", messageId);
       // Don't delete from local state immediately - wait for server confirmation
     }
@@ -645,6 +769,16 @@ const ChatApp: React.FC<Props> = ({ user, highlightMessageId, onMessageHighlight
           onScroll={handleScroll}
           className="flex-1 overflow-y-auto p-4 space-y-2 bg-panel"
         >
+          {/* Loading indicator when loading more messages */}
+          {selected === "public" && isLoadingMore && (
+            <div className="flex justify-center py-2">
+              <div className="flex items-center space-x-2 text-fg opacity-70">
+                <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
+                <span>Loading older messages...</span>
+              </div>
+            </div>
+          )}
+          
           {msgs.map((m) => (
             <div
               key={m.id}
@@ -659,7 +793,14 @@ const ChatApp: React.FC<Props> = ({ user, highlightMessageId, onMessageHighlight
               {m.sender !== myEmail && (
                 <div className="mr-3 mt-1 flex-shrink-0">
                   <Avatar 
-                    user={users.find(u => u.email === m.sender) || { id: m.sender, email: m.sender, nickname: m.sender, joinTime: 0 }} 
+                    user={(() => {
+                      const foundUser = users.find(u => u.email === m.sender);
+                      if (!foundUser) {
+                        console.log(`⚠️ User not found in users list for message sender: ${m.sender}`);
+                        return { id: m.sender, email: m.sender, nickname: m.sender, avatar: undefined, joinTime: 0 };
+                      }
+                      return foundUser;
+                    })()} 
                     size="sm" 
                   />
                 </div>
@@ -815,6 +956,6 @@ const ChatApp: React.FC<Props> = ({ user, highlightMessageId, onMessageHighlight
       </section>
     </>
   );
-};
+});
 
 export default ChatApp;

@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from "react";
-import ChatApp from "./ChatApp";
+import React, { useEffect, useState, useRef } from "react";
+import ChatApp, { ChatAppRef } from "./ChatApp";
 import AuthForm from "./AuthForm";
 import ThemeToggle from "./themestoggle";
 import Settings from "./Settings";
@@ -22,6 +22,7 @@ const App: React.FC = () => {
   const [showSettings, setShowSettings] = useState<boolean>(false);
   const [showSearch, setShowSearch] = useState<boolean>(false);
   const [selectedMessageId, setSelectedMessageId] = useState<string | null>(null);
+  const chatAppRef = useRef<ChatAppRef>(null);
 
   // Check if user is already authenticated on app load
   useEffect(() => {
@@ -83,6 +84,17 @@ const App: React.FC = () => {
   // Handle user profile update
   const handleUserUpdate = (updatedUser: User) => {
     setUser(updatedUser);
+  };
+
+  // Handle profile update for real-time sync
+  const handleProfileUpdate = (userId: string, nickname: string, avatar?: string) => {
+    console.log('📡 App.tsx: handleProfileUpdate called with:', { userId, nickname, avatar: avatar ? '[has avatar]' : 'no avatar' });
+    if (chatAppRef.current) {
+      console.log('📡 App.tsx: Calling ChatApp.emitProfileUpdate...');
+      chatAppRef.current.emitProfileUpdate(userId, nickname, avatar);
+    } else {
+      console.error('❌ App.tsx: chatAppRef.current is null!');
+    }
   };
 
   const handleMessageSelect = (messageId: string) => {
@@ -165,6 +177,7 @@ const App: React.FC = () => {
       <main className="flex flex-1 overflow-hidden">
         {user && (
           <ChatApp 
+            ref={chatAppRef}
             user={user} 
             highlightMessageId={selectedMessageId || undefined}
             onMessageHighlighted={handleMessageHighlighted}
@@ -178,6 +191,7 @@ const App: React.FC = () => {
           user={user}
           onClose={() => setShowSettings(false)}
           onUserUpdate={handleUserUpdate}
+          onProfileUpdate={handleProfileUpdate}
         />
       )}
 

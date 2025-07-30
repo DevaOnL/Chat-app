@@ -12,9 +12,10 @@ interface SettingsProps {
   user: User;
   onClose: () => void;
   onUserUpdate: (updatedUser: User) => void;
+  onProfileUpdate: (userId: string, nickname: string, avatar?: string) => void;
 }
 
-const Settings: React.FC<SettingsProps> = ({ user, onClose, onUserUpdate }) => {
+const Settings: React.FC<SettingsProps> = ({ user, onClose, onUserUpdate, onProfileUpdate }) => {
   const [formData, setFormData] = useState({
     nickname: user.nickname || '',
     email: user.email || '',
@@ -131,6 +132,9 @@ const Settings: React.FC<SettingsProps> = ({ user, onClose, onUserUpdate }) => {
         throw new Error(data.error || 'Failed to update profile');
       }
 
+      // Emit socket event to update other users in real-time
+      onProfileUpdate(data.user.id, data.user.nickname, data.user.avatar);
+
       // Update user in localStorage
       localStorage.setItem('user', JSON.stringify(data.user));
       
@@ -175,13 +179,43 @@ const Settings: React.FC<SettingsProps> = ({ user, onClose, onUserUpdate }) => {
         return;
       }
 
-      // Convert to base64
-      const reader = new FileReader();
-      reader.onload = (event) => {
-        const base64String = event.target?.result as string;
+      // Compress and convert to base64
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      const img = new Image();
+      
+      img.onload = () => {
+        // Set maximum dimensions for avatar
+        const maxSize = 200;
+        let { width, height } = img;
+        
+        // Calculate new dimensions while maintaining aspect ratio
+        if (width > height) {
+          if (width > maxSize) {
+            height = (height * maxSize) / width;
+            width = maxSize;
+          }
+        } else {
+          if (height > maxSize) {
+            width = (width * maxSize) / height;
+            height = maxSize;
+          }
+        }
+        
+        canvas.width = width;
+        canvas.height = height;
+        
+        // Draw and compress the image
+        ctx?.drawImage(img, 0, 0, width, height);
+        
+        // Convert to base64 with compression (0.8 quality for JPEG)
+        const compressedBase64 = canvas.toDataURL('image/jpeg', 0.8);
+        
+        console.log(`📸 Image compressed: ${file.size} bytes -> ${compressedBase64.length} chars`);
+        
         setFormData(prev => ({
           ...prev,
-          avatar: base64String
+          avatar: compressedBase64
         }));
         
         // Clear avatar error
@@ -192,7 +226,15 @@ const Settings: React.FC<SettingsProps> = ({ user, onClose, onUserUpdate }) => {
           }));
         }
       };
-      reader.readAsDataURL(file);
+      
+      img.onerror = () => {
+        setErrors(prev => ({
+          ...prev,
+          avatar: 'Failed to process image'
+        }));
+      };
+      
+      img.src = URL.createObjectURL(file);
     }
   };
 

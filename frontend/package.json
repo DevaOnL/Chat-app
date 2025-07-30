@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "serve": "node serve-prod.js",
+    "prod": "npm run build && npm run serve"
   },
   "dependencies": {
     "express-rate-limit": "^7.5.1",
@@ -20,6 +22,8 @@
     "@types/react-dom": "^18.2.7",
     "@vitejs/plugin-react": "^4.6.0",
     "autoprefixer": "^10.4.21",
+    "express": "^5.1.0",
+    "http-proxy-middleware": "^3.0.5",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.4",
     "typescript": "^5.8.3",

@@ -42,6 +42,35 @@ export class MessageService {
   }
 
   /**
+   * Get messages for a specific thread with pagination support
+   */
+  static async getMessagesByThreadPaginated(
+    thread: string, 
+    limit: number = 50, 
+    skip: number = 0
+  ): Promise<{ messages: IMessage[], hasMore: boolean, total: number }> {
+    // Get total count for hasMore calculation
+    const total = await Message.countDocuments({ thread });
+    
+    // Get messages with pagination
+    const messages = await Message.find({ thread })
+      .sort({ createdAt: -1 }) // Most recent first
+      .skip(skip)
+      .limit(limit)
+      .exec();
+    
+    // Check if there are more messages
+    const hasMore = skip + messages.length < total;
+    
+    // Reverse to get chronological order (oldest to newest)
+    return {
+      messages: messages.reverse(),
+      hasMore,
+      total
+    };
+  }
+
+  /**
    * Get recent public messages
    */
   static async getPublicMessages(limit: number = 50): Promise<IMessage[]> {

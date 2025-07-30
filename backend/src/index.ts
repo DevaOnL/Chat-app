@@ -47,6 +47,7 @@ interface User {
   id: string;
   email: string;                                         
   nickname: string;    
+  avatar?: string;
   joinTime: number;
   lastSeen: number;
   isTyping?: boolean;
@@ -111,7 +112,7 @@ function isRateLimited(socketId: string): boolean {
   return false;
 }
 
-function broadcastUserList() {
+async function broadcastUserList() {
   // Get unique users (deduplicate by both email AND user ID, using the most recent session)
   const uniqueUsersByEmail = new Map<string, User>();
   const uniqueUsersById = new Map<string, User>();
@@ -130,24 +131,34 @@ function broadcastUserList() {
     }
   }
   
-  // Use the stricter deduplication (by ID) to ensure no duplicate user IDs
-  const userList = Array.from(uniqueUsersById.values()).map(user => ({
-    id: user.id,
-    email: user.email,  
-    nickname: user.nickname,
-    isTyping: user.isTyping,
-    joinTime: user.joinTime
-  }));
-  
-  console.log(`📋 Broadcasting user list: ${userList.length} unique users (${users.size} total connections)`);
-  console.log(`👥 Users: ${userList.map(u => `${u.email} (ID: ${u.id})`).join(', ')}`);
-  
-  // Debug: Check if email and ID deduplication gave different results
-  const emailUniqueCount = uniqueUsersByEmail.size;
-  const idUniqueCount = uniqueUsersById.size;
-  if (emailUniqueCount !== idUniqueCount) {
-    console.warn(`⚠️ Deduplication mismatch: ${emailUniqueCount} unique emails vs ${idUniqueCount} unique IDs`);
+  // Fetch fresh user data from database to ensure avatars are up to date
+  const userList = [];
+  for (const user of Array.from(uniqueUsersById.values())) {
+    try {
+      const dbUser = await UserService.findUserById(user.id);
+      userList.push({
+        id: user.id,
+        email: user.email,  
+        nickname: dbUser?.nickname || user.nickname,
+        avatar: dbUser?.avatar, // Always use fresh avatar from database
+        isTyping: user.isTyping,
+        joinTime: user.joinTime
+      });
+    } catch (error) {
+      console.error(`Error fetching user data for ${user.email}:`, error);
+      // Fallback to in-memory data if database lookup fails
+      userList.push({
+        id: user.id,
+        email: user.email,  
+        nickname: user.nickname,
+        avatar: user.avatar,
+        isTyping: user.isTyping,
+        joinTime: user.joinTime
+      });
+    }
   }
+  
+  // Broadcast unique user list to all clients
   io.emit("users update", userList);
 }
 
@@ -170,7 +181,8 @@ function broadcastTypingStatus(socketId: string, isTyping: boolean, thread: stri
 }
 
 // Middleware
-app.use(express.json());
+app.use(express.json({ limit: '10mb' })); // Increase limit for avatar uploads
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
 app.use(express.static(path.join(__dirname, "../../frontend/dist")));
 
 // Authentication routes
@@ -244,8 +256,6 @@ app.get("/api/messages/search", (req: AuthRequest, res: Response, next: NextFunc
       skip = 0
     } = req.query;
 
-    console.log(`🔍 Search request - Query: "${query}", Thread: ${thread}, Sender: ${sender}, Limit: ${limit}, Skip: ${skip}`);
-
     const searchOptions = {
       query: query as string,
       thread: thread as string,
@@ -258,8 +268,6 @@ app.get("/api/messages/search", (req: AuthRequest, res: Response, next: NextFunc
     };
 
     const results = await MessageService.searchMessages(searchOptions);
-    
-    console.log(`📊 Search results - Found: ${results.total} messages, Returned: ${results.messages.length}`);
     
     res.json({
       success: true,
@@ -315,7 +323,17 @@ io.on("connection", async (socket: Socket) => {
   if (typeof id !== 'string' || typeof email !== 'string' || typeof nickname !== 'string') {                                                                                 
     socket.disconnect();                                                                    
     return;                                                                                 
-  }  
+  }
+
+  // Get user data from database to include avatar
+  let userDbData;
+  try {
+    userDbData = await UserService.findUserByEmail(email);
+  } catch (error) {
+    console.error('Error fetching user data:', error);
+    socket.disconnect();
+    return;
+  }
 
   // Handle multiple sessions for the same user
   const existingSocketId = emailToSocketId.get(email);
@@ -347,7 +365,8 @@ io.on("connection", async (socket: Socket) => {
   const user: User = {
     id, 
     email,
-    nickname,  
+    nickname: userDbData?.nickname || nickname,
+    avatar: userDbData?.avatar,
     joinTime: Date.now(),
     lastSeen: Date.now()
   };
@@ -389,12 +408,12 @@ io.on("connection", async (socket: Socket) => {
     socket.emit("message history", []);
   }
   
-  broadcastUserList();
+  await broadcastUserList();
 
  console.log(`User connected: ${nickname} (${email})`);
 
   // Handle user disconnect
-  socket.on("disconnect", () => {
+  socket.on("disconnect", async () => {
     const user = users.get(socket.id);
     if (user) {
       // Remove this socket from user sessions
@@ -419,17 +438,51 @@ io.on("connection", async (socket: Socket) => {
       
       users.delete(socket.id);
       messageLimiter.delete(socket.id);
-      broadcastUserList();
+      await broadcastUserList();
       console.log(`👋 User disconnected: ${user.nickname} (${user.email}, socket: ${socket.id})`);  
     }
   });
 
   // Handle nickname setting
-  socket.on("set nickname", (nickname: string) => {
+  socket.on("set nickname", async (nickname: string) => {
     const user = users.get(socket.id);
     if (user && nickname.trim().length > 0) {
       user.nickname = sanitizeMessage(nickname).slice(0, 20);
-      broadcastUserList();
+      await broadcastUserList();
+    }
+  });
+
+  // Handle profile updates (avatar, nickname changes from settings)
+  socket.on("profile updated", async ({ userId, nickname, avatar }) => {
+    try {
+      // Fetch the updated user data from database to ensure we have the latest info
+      const dbUser = await UserService.findUserById(userId);
+      if (!dbUser) {
+        console.error("❌ Backend: User not found in database:", userId);
+        return;
+      }
+      
+      // Update the user in the users map
+      const user = users.get(socket.id);
+      if (user && user.id === userId) {
+        user.nickname = dbUser.nickname || user.nickname;
+        user.avatar = dbUser.avatar;
+        
+        // Broadcast updated user list to all clients
+        await broadcastUserList();
+        
+        // Emit the profile update to all clients so they can update their local user data
+        io.emit("user profile updated", {
+          userId: user.id,
+          nickname: user.nickname,
+          avatar: user.avatar,
+          email: user.email
+        });
+      } else {
+        console.error("❌ Backend: User not found in socket users map or userId mismatch");
+      }
+    } catch (error) {
+      console.error("💥 Backend: Error handling profile update:", error);
     }
   });
 
@@ -460,8 +513,6 @@ io.on("connection", async (socket: Socket) => {
       }
 
       const message = await MessageService.createMessage(messageData);
-
-      console.log(`💾 Saved message to MongoDB: "${sanitized}" from ${user.email}${fileData ? ' with file' : ''}`);
 
       // Broadcast to all connected clients
       const messageToSend: any = {
@@ -531,8 +582,6 @@ io.on("connection", async (socket: Socket) => {
         privateMsg.file = savedMessage.file;
       }
 
-      console.log(`💾 Saved private message to MongoDB from ${user.email} to ${toEmail}${file ? ' with file' : ''}`);
-
       io.to(targetSocketId).emit("private message", privateMsg);
       socket.emit("private message", privateMsg);
       user.lastSeen = Date.now();
@@ -567,8 +616,6 @@ io.on("connection", async (socket: Socket) => {
         socket.emit("error", "Message not found or you don't have permission to edit it");
         return;
       }
-
-      console.log(`✅ Successfully edited message ${messageId}`);
 
       // Create message object for frontend
       const editedMsgForFrontend = {
@@ -616,8 +663,6 @@ io.on("connection", async (socket: Socket) => {
         socket.emit("error", "Message not found or you don't have permission to delete it");
         return;
       }
-
-      console.log(`✅ Successfully deleted message ${messageId}`);
 
       // Broadcast deletion to all connected users
       // For both public and private messages, we broadcast to everyone
@@ -667,8 +712,6 @@ io.on("connection", async (socket: Socket) => {
         socket.emit("error", "Failed to update reaction");
         return;
       }
-
-      console.log(`✅ Successfully toggled reaction ${emoji} on message ${messageId}`);
 
       // Create reaction update object for frontend
       const reactionUpdate = { 
