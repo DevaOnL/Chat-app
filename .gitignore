@@ -3,6 +3,4 @@ dist/
 dist/
 .DS_Store
 .env
-
-# User uploaded files - should not be tracked in git
 uploads/
