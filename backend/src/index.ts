@@ -11,7 +11,9 @@ import fs from "fs";
 import { connectDB } from "./config/database.js";
 import { UserService } from "./services/UserService.js";
 import { MessageService } from "./services/MessageService.js";
+import { GroupService } from "./services/GroupService.js";
 import authRoutes from "./auth.js";
+import groupRoutes from "./routes/groups.js";
 import { authenticateToken, AuthRequest } from "./middleware.js";
 
 // Load environment variables
@@ -76,9 +78,14 @@ interface PrivateMessage {
   };
 }
 
+interface GroupTypingStatus {
+  [groupId: string]: Map<string, boolean>; // groupId -> Map<userEmail, isTyping>
+}
+
 const users = new Map<string, User>(); // socket.id -> User  
 const emailToSocketId = new Map<string, string>(); // email -> socket.id 
 const userSessions = new Map<string, Set<string>>(); // email -> Set of socket.ids (for multiple tabs)
+const groupTypingStatus: GroupTypingStatus = {}; // Track typing status for groups
 // Note: Messages are now stored in MongoDB, not in memory
 const maxMessageHistory = 100;
 
@@ -170,13 +177,50 @@ function broadcastTypingStatus(socketId: string, isTyping: boolean, thread: stri
     
     if (thread === "public") {
        io.emit("typing status", { email: user.email, isTyping, thread });
-    } else {
+    } else if (thread.includes('@')) {
       // For DMs, send to the specific user
       const targetSocketId = emailToSocketId.get(thread);
       if (targetSocketId) {
         io.to(targetSocketId).emit("typing status", { email: user.email, isTyping, thread: user.email });   
       }
+    } else {
+      // For groups, broadcast to all group members
+      broadcastGroupTypingStatus(socketId, isTyping, thread);
     }
+  }
+}
+
+async function broadcastGroupTypingStatus(socketId: string, isTyping: boolean, groupId: string) {
+  const user = users.get(socketId);
+  if (!user) return;
+
+  try {
+    // Check if user is member of group
+    const isMember = await GroupService.isUserMember(groupId, user.email);
+    if (!isMember) return;
+
+    // Update typing status for this group
+    if (!groupTypingStatus[groupId]) {
+      groupTypingStatus[groupId] = new Map();
+    }
+    groupTypingStatus[groupId].set(user.email, isTyping);
+
+    // Get all group members and emit to their sockets
+    const group = await GroupService.findGroupById(groupId);
+    if (group) {
+      group.members.forEach(memberEmail => {
+        const memberSocketId = emailToSocketId.get(memberEmail);
+        if (memberSocketId && memberSocketId !== socketId) {
+          io.to(memberSocketId).emit("group typing status", { 
+            groupId, 
+            email: user.email, 
+            isTyping 
+          });
+        }
+      });
+    }
+  } catch (error) {
+    console.error('Error broadcasting group typing status:', error);
   }
 }
 
@@ -187,6 +231,9 @@ app.use(express.static(path.join(__dirname, "../../frontend/dist")));
 
 // Authentication routes
 app.use("/api/auth", authRoutes);
+
+// Group routes  
+app.use("/api/groups", groupRoutes);
 
 // File upload configuration
 const uploadsDir = path.join(__dirname, "../../uploads");
@@ -728,6 +775,21 @@ io.on("connection", async (socket: Socket) => {
         if (recipientSocketId) {
           io.to(recipientSocketId).emit("reaction updated", reactionUpdate);
         }
+      } else if (updatedMessage.groupId) {
+        // For group messages, send to all group members
+        try {
+          const group = await GroupService.findGroupById(updatedMessage.groupId);
+          if (group) {
+            group.members.forEach(memberEmail => {
+              const memberSocketId = emailToSocketId.get(memberEmail);
+              if (memberSocketId) {
+                io.to(memberSocketId).emit("reaction updated", reactionUpdate);
+              }
+            });
+          }
+        } catch (error) {
+          console.error('Error broadcasting group reaction:', error);
+        }
       } else {
         // For public messages, broadcast to all users
         console.log(`Broadcasting reaction update:`, reactionUpdate);
@@ -736,6 +798,269 @@ io.on("connection", async (socket: Socket) => {
     } catch (error) {
       console.error('Error handling reaction:', error);
       socket.emit("error", "Failed to process reaction");
+    }
+  });
+
+  // Handle group message sending
+  socket.on("group message", async ({ groupId, message, file }) => {
+    if (isRateLimited(socket.id)) {
+      socket.emit("error", "Rate limit exceeded. Please slow down.");
+      return;
+    }
+
+    const user = users.get(socket.id);
+    if (!user) return;
+
+    try {
+      // Check if user is member of group
+      const isMember = await GroupService.isUserMember(groupId, user.email);
+      if (!isMember) {
+        socket.emit("error", "You are not a member of this group");
+        return;
+      }
+
+      const sanitized = sanitizeMessage(message);
+      if (!sanitized) return;
+
+      // Save group message to database
+      const messageData: any = {
+        text: sanitized,
+        sender: user.email,
+        thread: groupId, // Use groupId as thread for group messages
+        groupId: groupId
+      };
+
+      // Add file data if present
+      if (file) {
+        messageData.file = file;
+      }
+
+      const savedMessage = await MessageService.createMessage(messageData);
+
+      // Create message object for frontend
+      const messageToSend: any = {
+        id: (savedMessage._id as string).toString(),
+        text: savedMessage.text,
+        sender: savedMessage.sender,
+        timestamp: savedMessage.createdAt.getTime(),
+        groupId: savedMessage.groupId
+      };
+
+      // Add file data if present
+      if (savedMessage.file) {
+        messageToSend.file = savedMessage.file;
+      }
+
+      // Send to all group members
+      const group = await GroupService.findGroupById(groupId);
+      if (group) {
+        group.members.forEach(memberEmail => {
+          const memberSocketId = emailToSocketId.get(memberEmail);
+          if (memberSocketId) {
+            io.to(memberSocketId).emit("group message", messageToSend);
+          }
+        });
+      }
+
+      user.lastSeen = Date.now();
+    } catch (error) {
+      console.error("Error sending group message:", error);
+      socket.emit("error", "Failed to send group message");
+    }
+  });
+
+  // Handle joining group room
+  socket.on("join group", async (groupId: string) => {
+    const user = users.get(socket.id);
+    if (!user) return;
+
+    try {
+      // Check if user is member of group
+      const isMember = await GroupService.isUserMember(groupId, user.email);
+      if (!isMember) {
+        socket.emit("error", "You are not a member of this group");
+        return;
+      }
+
+      // Join the socket room for this group
+      socket.join(`group_${groupId}`);
+      
+      // Send recent group messages
+      const recentMessages = await MessageService.getGroupMessages(groupId, 50);
+      
+      // Transform messages to frontend format
+      const transformedMessages = recentMessages.map(msg => {
+        const transformedMsg: any = {
+          id: (msg._id as string).toString(),
+          text: msg.text,
+          sender: msg.sender,
+          timestamp: msg.createdAt.getTime(),
+          edited: msg.edited || false,
+          reactions: Object.fromEntries(msg.reactions || new Map()),
+          groupId: msg.groupId
+        };
+        
+        // Add file data if present
+        if (msg.file) {
+          transformedMsg.file = msg.file;
+        }
+        
+        return transformedMsg;
+      });
+      
+      socket.emit("group message history", { groupId, messages: transformedMessages });
+      
+      // Notify other group members that user joined
+      socket.to(`group_${groupId}`).emit("user joined group", {
+        groupId,
+        userEmail: user.email,
+        nickname: user.nickname
+      });
+      
+    } catch (error) {
+      console.error("Error joining group:", error);
+      socket.emit("error", "Failed to join group");
+    }
+  });
+
+  // Handle leaving group room
+  socket.on("leave group", async (groupId: string) => {
+    const user = users.get(socket.id);
+    if (!user) return;
+
+    // Leave the socket room for this group
+    socket.leave(`group_${groupId}`);
+    
+    // Notify other group members that user left
+    socket.to(`group_${groupId}`).emit("user left group", {
+      groupId,
+      userEmail: user.email,
+      nickname: user.nickname
+    });
+  });
+
+  // Handle group creation notification
+  socket.on("group created", async ({ groupId }) => {
+    const user = users.get(socket.id);
+    if (!user) return;
+
+    try {
+      const group = await GroupService.findGroupById(groupId);
+      if (group) {
+        // Notify all group members about the new group
+        group.members.forEach(memberEmail => {
+          const memberSocketId = emailToSocketId.get(memberEmail);
+          if (memberSocketId) {
+            io.to(memberSocketId).emit("group created", {
+              group: {
+                id: (group._id as string).toString(),
+                name: group.name,
+                description: group.description,
+                members: group.members,
+                admins: group.admins,
+                creator: group.creator,
+                avatar: group.avatar,
+                isPrivate: group.isPrivate,
+                createdAt: group.createdAt,
+                updatedAt: group.updatedAt
+              }
+            });
+          }
+        });
+      }
+    } catch (error) {
+      console.error("Error handling group creation notification:", error);
+    }
+  });
+
+  // Handle group updates
+  socket.on("group updated", async ({ groupId, updates }) => {
+    const user = users.get(socket.id);
+    if (!user) return;
+
+    try {
+      const group = await GroupService.findGroupById(groupId);
+      if (group && group.admins.includes(user.email)) {
+        // Notify all group members about the update
+        group.members.forEach(memberEmail => {
+          const memberSocketId = emailToSocketId.get(memberEmail);
+          if (memberSocketId) {
+            io.to(memberSocketId).emit("group updated", {
+              groupId,
+              updates
+            });
+          }
+        });
+      }
+    } catch (error) {
+      console.error("Error handling group update notification:", error);
+    }
+  });
+
+  // Handle member added to group
+  socket.on("member added", async ({ groupId, memberEmail }) => {
+    const user = users.get(socket.id);
+    if (!user) return;
+
+    try {
+      const group = await GroupService.findGroupById(groupId);
+      if (group && group.admins.includes(user.email)) {
+        // Notify all group members about new member
+        group.members.forEach(existingMemberEmail => {
+          const memberSocketId = emailToSocketId.get(existingMemberEmail);
+          if (memberSocketId) {
+            io.to(memberSocketId).emit("member added", {
+              groupId,
+              memberEmail,
+              addedBy: user.email
+            });
+          }
+        });
+      }
+    } catch (error) {
+      console.error("Error handling member added notification:", error);
+    }
+  });
+
+  // Handle member removed from group
+  socket.on("member removed", async ({ groupId, memberEmail }) => {
+    const user = users.get(socket.id);
+    if (!user) return;
+
+    try {
+      const group = await GroupService.findGroupById(groupId);
+      if (group && (group.admins.includes(user.email) || user.email === memberEmail)) {
+        // Notify all group members about member removal
+        group.members.forEach(existingMemberEmail => {
+          const memberSocketId = emailToSocketId.get(existingMemberEmail);
+          if (memberSocketId) {
+            io.to(memberSocketId).emit("member removed", {
+              groupId,
+              memberEmail,
+              removedBy: user.email
+            });
+          }
+        });
+      }
+    } catch (error) {
+      console.error("Error handling member removed notification:", error);
+    }
+  });
+
+  // Handle group deletion
+  socket.on("group deleted", async ({ groupId }) => {
+    const user = users.get(socket.id);
+    if (!user) return;
+
+    try {
+      // Notify all connected users about group deletion
+      // We broadcast to all since we can't get group members after deletion
+      io.emit("group deleted", {
+        groupId,
+        deletedBy: user.email
+      });
+    } catch (error) {
+      console.error("Error handling group deletion notification:", error);
     }
   });
 });

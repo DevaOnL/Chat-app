@@ -9,6 +9,8 @@ export class MessageService {
     text: string;
     sender: string;
     thread: string;
+    groupId?: string;
+    file?: any;
   }): Promise<IMessage> {
     const message = new Message(messageData);
     return await message.save();
@@ -28,7 +30,21 @@ export class MessageService {
   }
 
   /**
-   * Get messages for a specific thread (public or private)
+   * Get group messages
+   */
+  static async getGroupMessages(groupId: string, limit: number = 50): Promise<IMessage[]> {
+    // Get most recent messages first, then reverse for chronological order
+    const messages = await Message.find({ groupId })
+      .sort({ createdAt: -1 }) // Most recent first
+      .limit(limit)
+      .exec();
+    
+    // Reverse to get chronological order (oldest to newest)
+    return messages.reverse();
+  }
+
+  /**
+   * Get messages for a specific thread (public, private, or group)
    */
   static async getMessagesByThread(thread: string, limit: number = 50): Promise<IMessage[]> {
     // Get most recent messages first, then reverse for chronological order

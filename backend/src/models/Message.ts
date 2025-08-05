@@ -3,7 +3,8 @@ import mongoose, { Schema, Document } from 'mongoose';
 export interface IMessage extends Document {
   text: string;
   sender: string; // email of sender
-  thread: string; // 'public' or email for private messages
+  thread: string; // 'public', email for private messages, or group ID for group messages
+  groupId?: string; // Optional group ID for group messages
   edited?: boolean;
   reactions?: Map<string, string[]>; // emoji -> array of user emails
   file?: {
@@ -32,6 +33,12 @@ const MessageSchema: Schema = new Schema({
     type: String,
     required: true,
     index: true // Index for faster thread queries
+  },
+  groupId: {
+    type: String,
+    ref: 'Group',
+    default: null,
+    index: true // Index for faster group queries
   },
   edited: {
     type: Boolean,
@@ -70,6 +77,12 @@ MessageSchema.index({ thread: 1, createdAt: -1 });
 
 // Index for finding messages by sender
 MessageSchema.index({ sender: 1 });
+
+// Index for group messages
+MessageSchema.index({ groupId: 1, createdAt: -1 });
+
+// Compound index for group and thread queries
+MessageSchema.index({ groupId: 1, thread: 1, createdAt: -1 });
 
 // Text search index for message content and file names
 MessageSchema.index({ 
