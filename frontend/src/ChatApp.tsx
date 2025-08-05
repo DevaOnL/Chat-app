@@ -1,9 +1,12 @@
 import React, { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from "react";
 import { io, Socket } from "socket.io-client";
 import Avatar from "./Avatar";
+import GroupAvatar from "./GroupAvatar";
 import FileUpload from "./FileUpload";
 import FileMessage from "./FileMessage";
 import { ReactionBar, QuickReactions } from "./EnhancedReactions";
+import GroupCreationModal from "./GroupCreationModal";
+import GroupSettingsModal from "./GroupSettingsModal";
 
 // Component for handling long messages with expand/collapse
 const MessageContent: React.FC<{ text: string }> = ({ text }) => {
@@ -42,6 +45,7 @@ interface Message {
     fileType: string;
     fileUrl: string;
   };
+  groupId?: string; // For group messages
 }
 
 interface User {
@@ -51,6 +55,19 @@ interface User {
   avatar?: string;
   isTyping?: boolean;
   joinTime: number;
+}
+
+interface Group {
+  _id: string;
+  name: string;
+  description?: string;
+  members: string[];
+  admins: string[];
+  creator: string;
+  avatar?: string;
+  isPrivate: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 interface Props {
@@ -79,11 +96,14 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
 
   /* ──────────────────────────────── state */
   const [users, setUsers] = useState<User[]>([]);
+  const [groups, setGroups] = useState<Group[]>([]);
   const [threads, setThreads] = useState<Record<string, Message[]>>({ public: [] });
   const [selected, setSelected] = useState("public");
+  const [selectedType, setSelectedType] = useState<'public' | 'user' | 'group'>('public');
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [typingUsers, setTypingUsers] = useState<Record<string, string[]>>({ public: [] });
+  const [groupTypingUsers, setGroupTypingUsers] = useState<Record<string, Record<string, boolean>>>({});
   const [connectionStatus, setConnectionStatus] = useState<"connecting" | "connected" | "disconnected">("connecting");
   const [editingMessage, setEditingMessage] = useState<string | null>(null);
   const [editText, setEditText] = useState("");
@@ -93,11 +113,50 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
   const [isUploadingFile, setIsUploadingFile] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [hasMoreMessages, setHasMoreMessages] = useState(true);
+  const [showGroupCreationModal, setShowGroupCreationModal] = useState(false);
+  const [showGroupSettingsModal, setShowGroupSettingsModal] = useState(false);
+  const [selectedGroup, setSelectedGroup] = useState<Group | null>(null);
 
   /* ──────────────────────────────── helpers */
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
+
+  const fetchGroups = useCallback(async () => {
+    try {
+      const token = localStorage.getItem('token');
+      const response = await fetch('/api/groups', {
+        headers: {
+          'Authorization': `Bearer ${token}`
+        }
+      });
+
+      if (response.ok) {
+        const result = await response.json();
+        setGroups(result.data);
+      }
+    } catch (error) {
+      console.error('Error fetching groups:', error);
+    }
+  }, []);
+
+  const getSelectedInfo = useCallback(() => {
+    if (selected === 'public') {
+      return { type: 'public' as const, name: 'Public Chat' };
+    }
+    
+    const group = groups.find(g => g._id === selected);
+    if (group) {
+      return { type: 'group' as const, name: group.name, group };
+    }
+    
+    const user = users.find(u => u.email === selected);
+    if (user) {
+      return { type: 'user' as const, name: user.nickname || user.email, user };
+    }
+    
+    return { type: 'user' as const, name: selected };
+  }, [selected, groups, users]);
 
   const loadMoreMessages = useCallback(async () => {
     if (isLoadingMore || !hasMoreMessages) return;
@@ -228,16 +287,20 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
   }, []);
 
   const handleReaction = useCallback((messageId: string, emoji: string) => {
-    console.log(`Sending reaction - MessageId: ${messageId}, Emoji: ${emoji}, UserId: ${user.id}, IsPrivate: ${selected !== "public"}`);
+    const selectedInfo = getSelectedInfo();
+    const isPrivate = selectedInfo.type === 'user';
+    const isGroup = selectedInfo.type === 'group';
+    
+    console.log(`Sending reaction - MessageId: ${messageId}, Emoji: ${emoji}, UserId: ${user.id}, IsPrivate: ${isPrivate}, IsGroup: ${isGroup}`);
     socketRef.current?.emit("toggle reaction", { 
       messageId, 
       emoji, 
       userId: user.id,
-      isPrivate: selected !== "public"
+      isPrivate: isPrivate
     });
     // Close emoji picker after selecting
     setShowEmojiPicker(null);
-  }, [user.id, selected]);
+  }, [user.id, getSelectedInfo]);
 
   const handleTyping = useCallback((typing: boolean) => {
     const socket = socketRef.current;
@@ -435,6 +498,72 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
       updateMessageReactions(messageId, reactions);
     });
 
+    // Group-specific socket events
+    socket.on("group message", (message: Message) => {
+      if (message.groupId) {
+        addMsg(message.groupId, message);
+      }
+    });
+
+    socket.on("group message history", ({ groupId, messages }: { groupId: string, messages: Message[] }) => {
+      setThreads(prev => ({ ...prev, [groupId]: messages }));
+      // Reset pagination state when receiving initial messages
+      setHasMoreMessages(messages.length >= 50);
+    });
+
+    socket.on("group typing status", ({ groupId, email, isTyping }: { groupId: string, email: string, isTyping: boolean }) => {
+      setGroupTypingUsers(prev => ({
+        ...prev,
+        [groupId]: {
+          ...prev[groupId],
+          [email]: isTyping
+        }
+      }));
+    });
+
+    socket.on("group created", ({ group }: { group: Group }) => {
+      setGroups(prev => [...prev, group]);
+    });
+
+    socket.on("group updated", ({ groupId, updates }: { groupId: string, updates: Partial<Group> }) => {
+      setGroups(prev => prev.map(g => 
+        g._id === groupId ? { ...g, ...updates } : g
+      ));
+    });
+
+    socket.on("member added", ({ groupId, memberEmail }: { groupId: string, memberEmail: string }) => {
+      setGroups(prev => prev.map(g => 
+        g._id === groupId ? { ...g, members: [...g.members, memberEmail] } : g
+      ));
+    });
+
+    socket.on("member removed", ({ groupId, memberEmail }: { groupId: string, memberEmail: string }) => {
+      setGroups(prev => prev.map(g => 
+        g._id === groupId ? { 
+          ...g, 
+          members: g.members.filter(email => email !== memberEmail),
+          admins: g.admins.filter(email => email !== memberEmail)
+        } : g
+      ));
+    });
+
+    socket.on("group deleted", ({ groupId }: { groupId: string }) => {
+      setGroups(prev => prev.filter(g => g._id !== groupId));
+      // Switch to public if currently viewing deleted group
+      if (selected === groupId) {
+        setSelected("public");
+        setSelectedType("public");
+      }
+    });
+
+    socket.on("user joined group", ({ groupId, userEmail }: { groupId: string, userEmail: string }) => {
+      console.log(`User ${userEmail} joined group ${groupId}`);
+    });
+
+    socket.on("user left group", ({ groupId, userEmail }: { groupId: string, userEmail: string }) => {
+      console.log(`User ${userEmail} left group ${groupId}`);
+    });
+
     return () => {
       socket.disconnect();
       if (typingTimeoutRef.current) {
@@ -442,6 +571,11 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
       }
     };
   }, [addMsg, updateMsg, deleteMsg, updateMessageReactions]);
+
+  /* Fetch groups on mount */
+  useEffect(() => {
+    fetchGroups();
+  }, [fetchGroups]);
 
   /* auto-scroll */
   useEffect(() => {
@@ -561,9 +695,13 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
     // Force auto-scroll when user sends a message
     shouldAutoScrollRef.current = true;
 
-    if (selected === "public") {
+    const selectedInfo = getSelectedInfo();
+    
+    if (selectedInfo.type === 'public') {
       socket.emit("chat message", input);
-    } else if (selected !== myEmail) {     
+    } else if (selectedInfo.type === 'group') {
+      socket.emit("group message", { groupId: selected, message: input });
+    } else if (selectedInfo.type === 'user' && selected !== myEmail) {     
       socket.emit("private message", { toEmail: selected, message: input });
     }
     setInput("");
@@ -589,7 +727,8 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
 
   const saveEdit = () => {
     if (editingMessage && editText.trim()) {
-      const isPrivate = selected !== "public";
+      const selectedInfo = getSelectedInfo();
+      const isPrivate = selectedInfo.type === 'user';
       socketRef.current?.emit("edit message", { 
         messageId: editingMessage, 
         newText: editText, 
@@ -655,9 +794,17 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
         }
       };
 
-      if (selected === "public") {
+      const selectedInfo = getSelectedInfo();
+      
+      if (selectedInfo.type === 'public') {
         socketRef.current?.emit("chat message", fileMessage.text, fileMessage.file);
-      } else {
+      } else if (selectedInfo.type === 'group') {
+        socketRef.current?.emit("group message", { 
+          groupId: selected, 
+          message: fileMessage.text,
+          file: fileMessage.file
+        });
+      } else if (selectedInfo.type === 'user') {
         socketRef.current?.emit("private message", { 
           toEmail: selected, 
           message: fileMessage.text,
@@ -689,6 +836,39 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
     });
   };
 
+  // Group handlers
+  const handleGroupCreated = (group: Group) => {
+    setGroups(prev => [...prev, group]);
+    // Emit group created event to notify other users
+    socketRef.current?.emit("group created", { groupId: group._id });
+  };
+
+  const handleGroupUpdated = (updatedGroup: Group) => {
+    setGroups(prev => prev.map(g => g._id === updatedGroup._id ? updatedGroup : g));
+    // Update selected group if it's the one being updated
+    if (selectedGroup && selectedGroup._id === updatedGroup._id) {
+      setSelectedGroup(updatedGroup);
+    }
+    // Emit group updated event
+    socketRef.current?.emit("group updated", { 
+      groupId: updatedGroup._id, 
+      updates: updatedGroup 
+    });
+  };
+
+  const handleGroupDeleted = (groupId: string) => {
+    setGroups(prev => prev.filter(g => g._id !== groupId));
+    // Switch to public if deleted group was selected
+    if (selected === groupId) {
+      setSelected("public");
+      setSelectedType("public");
+    }
+    setSelectedGroup(null);
+    setShowGroupSettingsModal(false);
+    // Emit group deleted event
+    socketRef.current?.emit("group deleted", { groupId });
+  };
+
   /* ──────────────────────────────── render */
   const msgs = threads[selected] || [];
    const selectedUser = users.find(u => u.email === selected);    
@@ -709,59 +889,194 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
       {/* sidebar */}
       <aside className="w-64 bg-panel border-r border-border overflow-y-auto">
         <div className="p-4 border-b border-border">
-          <h2 className="font-semibold mb-2">Users</h2>
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="font-semibold">Conversations</h2>
+            <button
+              onClick={() => setShowGroupCreationModal(true)}
+              className="text-accent hover:text-accentFore text-sm p-1 rounded hover:bg-panelAlt transition-colors"
+              title="Create Group"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+              </svg>
+            </button>
+          </div>
         </div>
-        <ul>
-          <li
-            className={`px-4 py-2 cursor-pointer hover:bg-panelAlt font-semibold ${
-              selected === "public" && "bg-panelAlt"
-            }`}
-            onClick={() => {
-              setSelected("public");
-              setShowEmojiPicker(null);
-            }}
-          >
-            <div className="flex items-center justify-between">
-              <span>Public Chat</span>
-              {typingUsers.public && typingUsers.public.length > 0 && (
-                <span className="text-xs text-accent">
-                  {typingUsers.public.length} typing...
-                </span>
-              )}
-            </div>
-          </li>
-          {users.map(user => (
+        
+        <div className="overflow-y-auto">
+          {/* Public Chat */}
+          <div className="px-4 py-2 text-xs font-medium text-muted uppercase tracking-wider">
+            Public
+          </div>
+          <ul>
             <li
-              key={user.id}    
-              className={`px-4 py-2 cursor-pointer hover:bg-panelAlt ${
-               selected === user.email && "bg-panelAlt"        
+              className={`px-4 py-2 cursor-pointer hover:bg-panelAlt font-semibold ${
+                selected === "public" && "bg-panelAlt"
               }`}
               onClick={() => {
-                setSelected(user.email);
+                setSelected("public");
+                setSelectedType("public");
                 setShowEmojiPicker(null);
-              }}          
+              }}
             >
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <Avatar user={user} size="sm" />
-                  <span>{user.nickname || user.email}</span>
-                </div>               
-                <div className="flex items-center gap-1">
-                 {typingUsers[user.email] && typingUsers[user.email].includes(myEmail) && (   
-                    <span className="text-xs text-accent">typing...</span>
-                  )}
-                  <div className="w-2 h-2 bg-green-500 rounded-full"></div>
-                </div>
+                <span>Public Chat</span>
+                {typingUsers.public && typingUsers.public.length > 0 && (
+                  <span className="text-xs text-accent">
+                    {typingUsers.public.length} typing...
+                  </span>
+                )}
               </div>
             </li>
-          ))}
-        </ul>
+          </ul>
+
+          {/* Groups */}
+          {groups.length > 0 && (
+            <>
+              <div className="px-4 py-2 text-xs font-medium text-muted uppercase tracking-wider mt-4">
+                Groups ({groups.length})
+              </div>
+              <ul>
+                {groups.map(group => {
+                  const groupTyping = groupTypingUsers[group._id];
+                  const typingCount = groupTyping ? Object.values(groupTyping).filter(Boolean).length : 0;
+                  
+                  return (
+                    <li
+                      key={group._id}
+                      className={`px-4 py-2 cursor-pointer hover:bg-panelAlt ${
+                        selected === group._id && "bg-panelAlt"
+                      }`}
+                      onClick={() => {
+                        setSelected(group._id);
+                        setSelectedType("group");
+                        setSelectedGroup(group);
+                        setShowEmojiPicker(null);
+                        // Join group room for real-time updates
+                        socketRef.current?.emit("join group", group._id);
+                      }}
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <GroupAvatar group={group} size="sm" />
+                          <div>
+                            <div className="font-medium truncate">{group.name}</div>
+                            <div className="text-xs text-muted">
+                              {group.members.length} member{group.members.length !== 1 ? 's' : ''}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          {typingCount > 0 && (
+                            <span className="text-xs text-accent">
+                              {typingCount} typing...
+                            </span>
+                          )}
+                          {group.admins.includes(user.email) && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setSelectedGroup(group);
+                                setShowGroupSettingsModal(true);
+                              }}
+                              className="text-muted hover:text-fg p-1"
+                              title="Group Settings"
+                            >
+                              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                              </svg>
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
+          )}
+
+          {/* Direct Messages */}
+          {users.length > 0 && (
+            <>
+              <div className="px-4 py-2 text-xs font-medium text-muted uppercase tracking-wider mt-4">
+                Direct Messages ({users.length})
+              </div>
+              <ul>
+                {users.map(user => (
+                  <li
+                    key={user.id}    
+                    className={`px-4 py-2 cursor-pointer hover:bg-panelAlt ${
+                     selected === user.email && "bg-panelAlt"        
+                    }`}
+                    onClick={() => {
+                      setSelected(user.email);
+                      setSelectedType("user");
+                      setShowEmojiPicker(null);
+                    }}          
+                  >
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <Avatar user={user} size="sm" />
+                        <span className="truncate">{user.nickname || user.email}</span>
+                      </div>               
+                      <div className="flex items-center gap-1">
+                       {typingUsers[user.email] && typingUsers[user.email].includes(myEmail) && (   
+                          <span className="text-xs text-accent">typing...</span>
+                        )}
+                        <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
       </aside>
 
       {/* chat area */}
       <section className="flex-1 flex flex-col">
         <div className="px-4 py-2 bg-header border-b border-border text-fg font-semibold">
-          {selected === "public" ? "Public Chat" : `Chat with ${selectedUser?.nickname || selected}`}
+          {(() => {
+            const selectedInfo = getSelectedInfo();
+            
+            if (selectedInfo.type === 'public') {
+              return "Public Chat";
+            } else if (selectedInfo.type === 'group' && selectedInfo.group) {
+              return (
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <GroupAvatar group={selectedInfo.group} size="sm" />
+                    <div>
+                      <div>{selectedInfo.group.name}</div>
+                      <div className="text-xs text-muted font-normal">
+                        {selectedInfo.group.members.length} member{selectedInfo.group.members.length !== 1 ? 's' : ''}
+                      </div>
+                    </div>
+                  </div>
+                  {selectedInfo.group.admins.includes(user.email) && (
+                    <button
+                      onClick={() => {
+                        setSelectedGroup(selectedInfo.group!);
+                        setShowGroupSettingsModal(true);
+                      }}
+                      className="text-muted hover:text-fg p-2 hover:bg-panelAlt rounded transition-colors"
+                      title="Group Settings"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                      </svg>
+                    </button>
+                  )}
+                </div>
+              );
+            } else {
+              return `Chat with ${selectedInfo.name}`;
+            }
+          })()}
         </div>
 
         <div 
@@ -954,6 +1269,26 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
           </button>
         </form>
       </section>
+
+      {/* Group Creation Modal */}
+      <GroupCreationModal
+        isOpen={showGroupCreationModal}
+        onClose={() => setShowGroupCreationModal(false)}
+        onGroupCreated={handleGroupCreated}
+        currentUser={user}
+      />
+
+      {/* Group Settings Modal */}
+      {selectedGroup && (
+        <GroupSettingsModal
+          isOpen={showGroupSettingsModal}
+          onClose={() => setShowGroupSettingsModal(false)}
+          group={selectedGroup}
+          currentUser={user}
+          onGroupUpdated={handleGroupUpdated}
+          onGroupDeleted={handleGroupDeleted}
+        />
+      )}
     </>
   );
 });
