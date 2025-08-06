@@ -95,10 +95,16 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
   const [hasMoreMessages, setHasMoreMessages] = useState(true);
 
   /* ──────────────────────────────── helpers */
+  /**
+   * Smoothly scrolls the chat to the bottom to show latest messages
+   */
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
+  /**
+   * Loads older messages for infinite scroll functionality (public chat only)
+   */
   const loadMoreMessages = useCallback(async () => {
     if (isLoadingMore || !hasMoreMessages) return;
     
@@ -163,6 +169,9 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
     }
   }, [isLoadingMore, hasMoreMessages, threads, selected]);
 
+  /**
+   * Checks if user has scrolled near the bottom of the chat (within threshold)
+   */
   const isNearBottom = useCallback(() => {
     const container = messagesContainerRef.current;
     if (!container) return true;
@@ -172,6 +181,9 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
     return distanceFromBottom <= threshold;
   }, []);
 
+  /**
+   * Handles scroll events for auto-scroll detection and infinite scroll loading
+   */
   const handleScroll = useCallback(() => {
     shouldAutoScrollRef.current = isNearBottom();
     
@@ -185,6 +197,9 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
     }
   }, [isNearBottom, selected, hasMoreMessages, isLoadingMore, loadMoreMessages]);
 
+  /**
+   * Adds a new message to the specified thread and auto-scrolls if needed
+   */
   const addMsg = useCallback((thread: string, msg: Message) => {
     setThreads(prev => ({
       ...prev,
@@ -336,12 +351,6 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
       console.error("❌ Failed to reconnect");
       setConnectionStatus("disconnected");
     });
-
-    // socket.on("your code", (code: string) => {
-    //   myCodeRef.current = code;
-    //   setMyCode(code);
-    //   onCode(code);
-    // });
 
     socket.on("users update", (userList: User[]) => {
       // Filter out current user and deduplicate by user ID
@@ -673,14 +682,6 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
       setIsUploadingFile(false);
     }
   };
-
-  // const setUserNickname = () => {
-  //   if (nickname.trim()) {
-  //     socketRef.current?.emit("set nickname", nickname.trim());
-  //     setMyNickname(nickname.trim());
-  //     setShowNicknameModal(false);
-  //   }
-  // };
 
   const formatTime = (timestamp: number) => {
     return new Date(timestamp).toLocaleTimeString([], { 
