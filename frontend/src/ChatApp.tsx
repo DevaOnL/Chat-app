@@ -399,12 +399,14 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
 
     socket.on("typing status", ({ email, isTyping, thread }) => {          
       setTypingUsers(prev => {
-        const threadTyping = prev[thread] || [];
+        // Defensive: ensure prev is an object and threadTyping is always an array
+        const safeThread = thread || "public";
+        const threadTyping = Array.isArray(prev[safeThread]) ? prev[safeThread] : [];
         const newThreadTyping = isTyping 
          ? threadTyping.includes(email) ? threadTyping : [...threadTyping, email]   
          : threadTyping.filter(u => u !== email);       
         
-        return { ...prev, [thread]: newThreadTyping };
+        return { ...prev, [safeThread]: newThreadTyping };
       });
     });
 
@@ -695,10 +697,12 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
 
   return (
     <>
-      {/* Connection Status */}
+      {/* Connection Status - Fixed: use theme-aware colors for better contrast */}
       {connectionStatus !== "connected" && (
-        <div className={`fixed top-0 left-0 right-0 z-50 p-2 text-center text-white ${
-          connectionStatus === "connecting" ? "bg-yellow-500" : "bg-red-500"
+        <div className={`fixed top-0 left-0 right-0 z-50 p-2 text-center ${
+          connectionStatus === "connecting" 
+            ? "bg-warning text-warningFore" 
+            : "bg-error text-errorFore"
         }`}>
           {connectionStatus === "connecting" ? "Connecting..." : "Disconnected"}
         </div>
@@ -725,7 +729,8 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
               <span>Public Chat</span>
               {typingUsers.public && typingUsers.public.length > 0 && (
                 <span className="text-xs text-accent">
-                  {typingUsers.public.length} typing...
+                  {/* Safe access: typingUsers.public is guaranteed to exist here */}
+                  {(typingUsers.public || []).length} typing...
                 </span>
               )}
             </div>
@@ -747,7 +752,8 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
                   <span>{user.nickname || user.email}</span>
                 </div>               
                 <div className="flex items-center gap-1">
-                 {typingUsers[user.email] && typingUsers[user.email].includes(myEmail) && (   
+                 {/* Safe access: check if typing array exists and contains user */}
+                 {typingUsers[user.email] && Array.isArray(typingUsers[user.email]) && typingUsers[user.email].includes(myEmail) && (   
                     <span className="text-xs text-accent">typing...</span>
                   )}
                   <div className="w-2 h-2 bg-green-500 rounded-full"></div>
@@ -785,7 +791,7 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
               id={`message-${m.id}`}
               className={`flex ${m.sender === myEmail ? "justify-end" : "justify-start"} transition-all duration-300 group relative ${
                 highlightedMessageId === m.id 
-                  ? 'bg-yellow-200 dark:bg-yellow-800 bg-opacity-50 rounded-lg p-2 -m-2' 
+                  ? 'bg-highlight text-highlightFore bg-opacity-50 rounded-lg p-2 -m-2' 
                   : ''
               }`} 
             >

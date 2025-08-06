@@ -263,16 +263,16 @@ const Settings: React.FC<SettingsProps> = ({ user, onClose, onUserUpdate, onProf
             </button>
           </div>
 
-          {/* Success Message */}
+          {/* Success Message - Fixed: use theme-aware colors */}
           {successMessage && (
-            <div className="mb-4 p-3 bg-green-100 dark:bg-green-900 text-green-700 dark:text-green-300 rounded-lg">
+            <div className="mb-4 p-3 bg-success text-successFore rounded-lg">
               {successMessage}
             </div>
           )}
 
-          {/* Submit Error */}
+          {/* Submit Error - Fixed: use theme-aware colors */}
           {errors.submit && (
-            <div className="mb-4 p-3 bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 rounded-lg">
+            <div className="mb-4 p-3 bg-error text-errorFore rounded-lg">
               {errors.submit}
             </div>
           )}

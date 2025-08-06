@@ -17,6 +17,16 @@ body        { background-color:var(--bg); color:var(--fg); transition:background
 .text-accentFore { color:var(--accentFore); }
 .text-fg    { color:var(--fg); }      /* generic text when needed */
 
+/* Semantic theme-aware colors for better contrast */
+.bg-warning { background-color:var(--warning); }
+.text-warningFore { color:var(--warningFore); }
+.bg-error   { background-color:var(--error); }
+.text-errorFore { color:var(--errorFore); }
+.bg-success { background-color:var(--success); }
+.text-successFore { color:var(--successFore); }
+.bg-highlight { background-color:var(--highlight); }
+.text-highlightFore { color:var(--highlightFore); }
+
 /* Custom scrollbar styles */
 /* Webkit browsers (Chrome, Safari, Edge) */
 ::-webkit-scrollbar {
