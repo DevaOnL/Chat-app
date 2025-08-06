@@ -3,7 +3,6 @@ import http from "http";
 import { Server, Socket } from "socket.io";
 import path from "path";
 import { fileURLToPath } from "url";
-import { v4 as uuidv4 } from "uuid";
 import rateLimit from "express-rate-limit";
 import dotenv from "dotenv";
 import multer from "multer";
@@ -83,28 +82,27 @@ const userSessions = new Map<string, Set<string>>(); // email -> Set of socket.i
 const maxMessageHistory = 100;
 
 // Utility functions
-// function generateUserCode(): string {
-//   let code;
-//   do {
-//     code = uuidv4().slice(0, 6).toUpperCase();
-//   } while (codeToSocketId.has(code));
-//   return code;
-// }
-
+/**
+ * Sanitizes user input by trimming whitespace and limiting length to prevent spam
+ */
 function sanitizeMessage(message: string): string {
-  return message.trim().slice(0, 500); // Limit message length
+  return message.trim().slice(0, 500);
 }
 
+/**
+ * Rate limiting check for message sending to prevent spam
+ * Allows 30 messages per minute per socket
+ */
 function isRateLimited(socketId: string): boolean {
   const now = Date.now();
   const userLimit = messageLimiter.get(socketId);
   
   if (!userLimit || now > userLimit.resetTime) {
-    messageLimiter.set(socketId, { count: 1, resetTime: now + 60000 }); // 1 minute window
+    messageLimiter.set(socketId, { count: 1, resetTime: now + 60000 });
     return false;
   }
   
-  if (userLimit.count >= 30) { // 30 messages per minute
+  if (userLimit.count >= 30) {
     return true;
   }
   
@@ -374,14 +372,12 @@ io.on("connection", async (socket: Socket) => {
   users.set(socket.id, user);
   emailToSocketId.set(email, socket.id); 
   
-  console.log(`✅ User connected: ${email} (socket: ${socket.id})`);
+  console.log(`✅ User connected: ${email} (${nickname}, socket: ${socket.id})`);
   
   // Send initial data
-
   // Send recent public messages from database
   try {
     const recentMessages = await MessageService.getMessagesByThread("public", 50);
-    console.log(`📩 Loading ${recentMessages.length} messages from MongoDB for user: ${email}`);
     
     // Transform messages to frontend format
     const transformedMessages = recentMessages.map(msg => {
@@ -409,8 +405,6 @@ io.on("connection", async (socket: Socket) => {
   }
   
   await broadcastUserList();
-
- console.log(`User connected: ${nickname} (${email})`);
 
   // Handle user disconnect
   socket.on("disconnect", async () => {
