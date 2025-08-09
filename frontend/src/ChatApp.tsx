@@ -42,6 +42,7 @@ interface Message {
     fileType: string;
     fileUrl: string;
   };
+  thread: string;
 }
 
 interface User {
@@ -175,15 +176,14 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
   const handleScroll = useCallback(() => {
     shouldAutoScrollRef.current = isNearBottom();
     
-    // Check if user scrolled to the top and load more messages
     const container = messagesContainerRef.current;
-    if (container && selected === "public" && hasMoreMessages && !isLoadingMore) {
+    if (container && hasMoreMessages && !isLoadingMore) {
       const threshold = 100; // pixels from top
       if (container.scrollTop <= threshold) {
         loadMoreMessages();
       }
     }
-  }, [isNearBottom, selected, hasMoreMessages, isLoadingMore, loadMoreMessages]);
+  }, [isNearBottom, hasMoreMessages, isLoadingMore, loadMoreMessages]);
 
   const addMsg = useCallback((thread: string, msg: Message) => {
     setThreads(prev => ({
@@ -195,49 +195,43 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
     setTimeout(() => scrollToBottom(), 50);
   }, [scrollToBottom]);
 
-  const updateMsg = useCallback((messageId: string, newText: string) => {
-  setThreads(prev => {
-    const updated: Record<string, Message[]> = {};
-    for (const [thread, msgs] of Object.entries(prev)) {
-      updated[thread] = msgs.map(msg =>
-        msg.id === messageId ? { ...msg, text: newText, edited: true } : msg
-      );
-    }
-    return updated;
-  });
-}, []);
-
-  const deleteMsg = useCallback((messageId: string) => {
-    setThreads(prev => ({
-      ...prev,
-      public: prev.public.filter(msg => msg.id !== messageId)
-    }));
+   const deleteMsg = useCallback((messageId: string, threadId: string) => {
+    setThreads(prev => {
+      if (!prev[threadId]) return prev; // Add this line
+      return {
+        ...prev,
+        [threadId]: prev[threadId].filter(msg => msg.id !== messageId)
+      };
+    });
   }, []);
 
-  const updateMessageReactions = useCallback((messageId: string, reactions: { [emoji: string]: string[] }) => {
+  const updateMessageReactions = useCallback((messageId: string, reactions: { [emoji: string]: string[] }, threadId: string) => {
     console.log(`Updating message reactions - MessageId: ${messageId}, Reactions:`, reactions);
     setThreads(prev => {
-      const updated: Record<string, Message[]> = {};
-      for (const [thread, msgs] of Object.entries(prev)) {
-        updated[thread] = msgs.map(msg =>
-          msg.id === messageId ? { ...msg, reactions } : msg
-        );
+      // Guard against updates for threads that don't exist locally.
+      if (!prev[threadId]) {
+        console.warn(`Received reaction for a thread that does not exist locally: ${threadId}`);
+        return prev;
       }
-      return updated;
+      return {
+        ...prev,
+        [threadId]: prev[threadId].map(msg =>
+          msg.id === messageId ? { ...msg, reactions } : msg
+        ),
+      };
     });
   }, []);
 
   const handleReaction = useCallback((messageId: string, emoji: string) => {
-    console.log(`Sending reaction - MessageId: ${messageId}, Emoji: ${emoji}, UserId: ${user.id}, IsPrivate: ${selected !== "public"}`);
+    console.log(`Sending reaction - MessageId: ${messageId}, Emoji: ${emoji}, UserId: ${user.id}`);
     socketRef.current?.emit("toggle reaction", { 
       messageId, 
       emoji, 
-      userId: user.id,
-      isPrivate: selected !== "public"
+      userId: user.id
     });
     // Close emoji picker after selecting
     setShowEmojiPicker(null);
-  }, [user.id, selected]);
+  }, [user.id]);
 
   const handleTyping = useCallback((typing: boolean) => {
     const socket = socketRef.current;
@@ -337,12 +331,6 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
       setConnectionStatus("disconnected");
     });
 
-    // socket.on("your code", (code: string) => {
-    //   myCodeRef.current = code;
-    //   setMyCode(code);
-    //   onCode(code);
-    // });
-
     socket.on("users update", (userList: User[]) => {
       // Filter out current user and deduplicate by user ID
       const filteredUsers = userList.filter(u => u.email !== myEmail);
@@ -382,19 +370,22 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
       });
     });
 
-    socket.on("message history", (messages: Message[]) => {
-      setThreads(prev => ({ ...prev, public: messages }));
-      // Reset pagination state when receiving initial messages
-      setHasMoreMessages(messages.length >= 50); // Assume more if we got a full batch
+    socket.on("all message history", (history: { public: Message[], private: Record<string, Message[]> }) => {
+      setThreads(prev => ({
+        ...prev,
+        public: history.public || [],
+        ...history.private
+      }));
+      setHasMoreMessages(history.public.length >= 50);
     });
 
-    socket.on("chat message", (message: Message) => {
-      addMsg("public", message);
-    });
-
-    socket.on("private message", ({ from, to, message, timestamp, id }) => {
-      const thread = from === myEmail ? to : from;
-      addMsg(thread, { id, text: message, sender: from, timestamp });
+    socket.on("newMessage", (message: Message) => {
+      let threadKey = message.thread;
+      // For DMs, the thread key in the state is the other user's email.
+      if (message.thread !== 'public') {
+        threadKey = message.sender === myEmail ? message.thread : message.sender;
+      }
+      addMsg(threadKey, message);
     });
 
     socket.on("typing status", ({ email, isTyping, thread }) => {          
@@ -409,21 +400,22 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
     });
 
     socket.on("message edited", (message: Message) => {
+      let threadKey = message.thread;
+      if (message.thread !== 'public') {
+        threadKey = message.sender === myEmail ? message.thread : message.sender;
+      }
+
       setThreads(prev => {
-        const newThreads = { ...prev };
-        for (const thread in newThreads) {
-          newThreads[thread] = newThreads[thread].map(msg =>
-            msg.id === message.id ? { ...msg, text: message.text, edited: true } : msg
-          );
-        }
-        return newThreads;
+        if (!prev[threadKey]) return prev;
+        const newMessages = prev[threadKey].map(msg => 
+          msg.id === message.id ? { ...msg, text: message.text, edited: true } : msg
+        );
+        return { ...prev, [threadKey]: newMessages };
       });
     });
 
-    
-
-    socket.on("message deleted", (messageId: string) => {
-      deleteMsg(messageId);
+    socket.on("message deleted", ({messageId, threadId}) => {
+      deleteMsg(messageId, threadId);
     });
 
     socket.on("error", (error: string) => {
@@ -431,17 +423,36 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
       alert(error); // Replace with proper notification system
     });
 
-    socket.on("reaction updated", ({ messageId, reactions }) => {
-      updateMessageReactions(messageId, reactions);
+    socket.on("reaction updated", ({ messageId, reactions, threadId }) => {
+      updateMessageReactions(messageId, reactions, threadId);
     });
 
-    return () => {
+     return () => {
+      // Turn off all listeners to prevent duplicates on re-render
+      socket.off("connect");
+      socket.off("disconnect");
+      socket.off("session_replaced");
+      socket.off("connect_error");
+      socket.off("reconnect");
+      socket.off("reconnect_attempt");
+      socket.off("reconnect_error");
+      socket.off("reconnect_failed");
+      socket.off("users update");
+      socket.off("user profile updated");
+      socket.off("all message history");
+      socket.off("newMessage");
+      socket.off("typing status");
+      socket.off("message edited");
+      socket.off("message deleted");
+      socket.off("error");
+      socket.off("reaction updated");
+
       socket.disconnect();
       if (typingTimeoutRef.current) {
         clearTimeout(typingTimeoutRef.current);
       }
     };
-  }, [addMsg, updateMsg, deleteMsg, updateMessageReactions]);
+  }, [addMsg, deleteMsg, updateMessageReactions, myEmail, user.email, user.id, user.nickname]);
 
   /* auto-scroll */
   useEffect(() => {
@@ -450,11 +461,8 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
     scrollToBottom();
     
     // Reset pagination state when switching threads
-    if (selected === "public") {
-      setHasMoreMessages(true); // Reset to allow loading more for public chat
-    } else {
-      setHasMoreMessages(false); // Disable for private chats for now
-    }
+    setHasMoreMessages(true);
+
   }, [selected, scrollToBottom]);
 
   // Auto-scroll only when messages change AND user should auto-scroll
@@ -561,11 +569,7 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
     // Force auto-scroll when user sends a message
     shouldAutoScrollRef.current = true;
 
-    if (selected === "public") {
-      socket.emit("chat message", input);
-    } else if (selected !== myEmail) {     
-      socket.emit("private message", { toEmail: selected, message: input });
-    }
+    socket.emit("sendMessage", { threadId: selected, message: input });
     setInput("");
     inputRef.current?.focus();
   };
@@ -589,11 +593,9 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
 
   const saveEdit = () => {
     if (editingMessage && editText.trim()) {
-      const isPrivate = selected !== "public";
       socketRef.current?.emit("edit message", { 
         messageId: editingMessage, 
-        newText: editText, 
-        isPrivate 
+        newText: editText
       });
       // Don't update local state immediately - wait for server confirmation
     }
@@ -608,7 +610,7 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
 
   const handleDeleteMessage = (messageId: string) => {
     if (confirm("Are you sure you want to delete this message?")) {
-      socketRef.current?.emit("delete message", messageId);
+      socketRef.current?.emit("delete message", {messageId, threadId: selected});
       // Don't delete from local state immediately - wait for server confirmation
     }
   };
@@ -655,15 +657,12 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
         }
       };
 
-      if (selected === "public") {
-        socketRef.current?.emit("chat message", fileMessage.text, fileMessage.file);
-      } else {
-        socketRef.current?.emit("private message", { 
-          toEmail: selected, 
-          message: fileMessage.text,
-          file: fileMessage.file
-        });
-      }
+      socketRef.current?.emit("sendMessage", { 
+        threadId: selected, 
+        message: fileMessage.text,
+        file: fileMessage.file
+      });
+      
 
       setShowFileUpload(false);
     } catch (error) {
@@ -673,14 +672,6 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
       setIsUploadingFile(false);
     }
   };
-
-  // const setUserNickname = () => {
-  //   if (nickname.trim()) {
-  //     socketRef.current?.emit("set nickname", nickname.trim());
-  //     setMyNickname(nickname.trim());
-  //     setShowNicknameModal(false);
-  //   }
-  // };
 
   const formatTime = (timestamp: number) => {
     return new Date(timestamp).toLocaleTimeString([], { 
@@ -770,7 +761,7 @@ const ChatApp = forwardRef<ChatAppRef, Props>(({ user, highlightMessageId, onMes
           className="flex-1 overflow-y-auto p-4 space-y-2 bg-panel"
         >
           {/* Loading indicator when loading more messages */}
-          {selected === "public" && isLoadingMore && (
+          {isLoadingMore && (
             <div className="flex justify-center py-2">
               <div className="flex items-center space-x-2 text-fg opacity-70">
                 <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>

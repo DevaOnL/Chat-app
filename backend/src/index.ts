@@ -53,29 +53,6 @@ interface User {
   isTyping?: boolean;
 }
 
-interface ChatMessage {
-  id: string;
-  text: string;
-  sender: string;
-  timestamp: number;
-  edited?: boolean;
-  reactions?: {
-    [emoji: string]: string[]; // Array of user IDs who reacted
-  };
-}
-
-interface PrivateMessage {
-  id: string;
-  from: string;
-  to: string;
-  message: string;
-  timestamp: number;
-  read?: boolean;
-  reactions?: {
-    [emoji: string]: string[]; // Array of user IDs who reacted
-  };
-}
-
 const users = new Map<string, User>(); // socket.id -> User  
 const emailToSocketId = new Map<string, string>(); // email -> socket.id 
 const userSessions = new Map<string, Set<string>>(); // email -> Set of socket.ids (for multiple tabs)
@@ -83,14 +60,6 @@ const userSessions = new Map<string, Set<string>>(); // email -> Set of socket.i
 const maxMessageHistory = 100;
 
 // Utility functions
-// function generateUserCode(): string {
-//   let code;
-//   do {
-//     code = uuidv4().slice(0, 6).toUpperCase();
-//   } while (codeToSocketId.has(code));
-//   return code;
-// }
-
 function sanitizeMessage(message: string): string {
   return message.trim().slice(0, 500); // Limit message length
 }
@@ -379,34 +348,60 @@ io.on("connection", async (socket: Socket) => {
   // Send initial data
 
   // Send recent public messages from database
-  try {
-    const recentMessages = await MessageService.getMessagesByThread("public", 50);
-    console.log(`📩 Loading ${recentMessages.length} messages from MongoDB for user: ${email}`);
-    
-    // Transform messages to frontend format
-    const transformedMessages = recentMessages.map(msg => {
-      const transformedMsg: any = {
+  // Send recent messages from all relevant threads
+    try {
+      // 1. Get public messages
+      const publicMessages = await MessageService.getMessagesByThread("public", 50);
+
+      // 2. Get all other users to find private message threads
+      const allUsers = await UserService.getAllUsers();
+      const otherUsers = allUsers.filter(u => u.email !== email);
+
+      const privateHistories = new Map<string, any[]>();
+
+      // 3. Fetch recent messages for each private thread
+      for (const otherUser of otherUsers) {
+        const privateMessages = await MessageService.getPrivateMessages(email, otherUser.email, 50);
+        if (privateMessages.length > 0) {
+          const transformed = privateMessages.map(msg => ({
+            id: (msg._id as string).toString(),
+            text: msg.text,
+            sender: msg.sender,
+            timestamp: msg.createdAt.getTime(),
+            edited: msg.edited || false,
+            reactions: Object.fromEntries(msg.reactions || new Map()),
+            file: msg.file,
+            // The thread from the recipient's perspective is the sender's email
+            thread: msg.sender === email ? otherUser.email : msg.sender
+          }));
+          privateHistories.set(otherUser.email, transformed);
+        }
+      }
+
+      // 4. Transform public messages
+      const transformedPublic = publicMessages.map(msg => ({
         id: (msg._id as string).toString(),
         text: msg.text,
         sender: msg.sender,
         timestamp: msg.createdAt.getTime(),
         edited: msg.edited || false,
-        reactions: Object.fromEntries(msg.reactions || new Map())
-      };
+        reactions: Object.fromEntries(msg.reactions || new Map()),
+        file: msg.file,
+        thread: 'public'
+      }));
       
-      // Add file data if present
-      if (msg.file) {
-        transformedMsg.file = msg.file;
-      }
-      
-      return transformedMsg;
-    });
-    
-    socket.emit("message history", transformedMessages);
-  } catch (error) {
-    console.error("❌ Error fetching message history:", error);
-    socket.emit("message history", []);
-  }
+      // 5. Send all histories to the client
+      socket.emit("all message history", {
+        public: transformedPublic,
+        private: Object.fromEntries(privateHistories)
+      });
+
+      console.log(`📩 Sent message history for ${privateHistories.size + 1} threads to user: ${email}`);
+
+    } catch (error) {
+      console.error("❌ Error fetching message history:", error);
+      socket.emit("all message history", { public: [], private: {} });
+    }
   
   await broadcastUserList();
 
@@ -486,8 +481,8 @@ io.on("connection", async (socket: Socket) => {
     }
   });
 
-  // Handle public chat messages
-  socket.on("chat message", async (msg: string, fileData?: any) => {
+  // Unified message handler
+  socket.on("sendMessage", async ({ threadId, message, file }) => {
     if (isRateLimited(socket.id)) {
       socket.emit("error", "Rate limit exceeded. Please slow down.");
       return;
@@ -496,39 +491,41 @@ io.on("connection", async (socket: Socket) => {
     const user = users.get(socket.id);
     if (!user) return;
 
-    const sanitized = sanitizeMessage(msg);
+    const sanitized = sanitizeMessage(message);
     if (!sanitized) return;
 
     try {
-      // Save message to database
       const messageData: any = {
         text: sanitized,
         sender: user.email,
-        thread: "public"
+        thread: threadId
       };
 
-      // Add file data if present
-      if (fileData) {
-        messageData.file = fileData;
+      if (file) {
+        messageData.file = file;
       }
 
-      const message = await MessageService.createMessage(messageData);
-
-      // Broadcast to all connected clients
+      const savedMessage = await MessageService.createMessage(messageData);
       const messageToSend: any = {
-        id: (message._id as string).toString(),
-        text: message.text,
-        sender: message.sender,
-        timestamp: message.createdAt.getTime()
+        id: (savedMessage._id as string).toString(),
+        text: savedMessage.text,
+        sender: savedMessage.sender,
+        timestamp: savedMessage.createdAt.getTime(),
+        thread: savedMessage.thread,
+        file: savedMessage.file,
+        reactions: Object.fromEntries(savedMessage.reactions || new Map())
       };
 
-      // Add file data if present
-      if (message.file) {
-        messageToSend.file = message.file;
+      if (threadId === 'public') {
+        io.emit("newMessage", messageToSend);
+      } else {
+        // Private message
+        const targetSocketId = emailToSocketId.get(threadId);
+        if (targetSocketId) {
+          io.to(targetSocketId).emit("newMessage", messageToSend);
+        }
+        socket.emit("newMessage", messageToSend);
       }
-
-      io.emit("chat message", messageToSend);
-      
       user.lastSeen = Date.now();
     } catch (error) {
       console.error("Error saving message:", error);
@@ -536,68 +533,12 @@ io.on("connection", async (socket: Socket) => {
     }
   });
 
-  // Handle private messages
-  socket.on("private message", async ({ toEmail, message, file }) => {   
-    if (isRateLimited(socket.id)) {
-      socket.emit("error", "Rate limit exceeded. Please slow down.");
-      return;
-    }
-
-    const user = users.get(socket.id);
-    const targetSocketId = emailToSocketId.get(toEmail);      
-    
-    if (!user || !targetSocketId) {
-      socket.emit("error", "User not found");
-      return;
-    }
-
-    const sanitized = sanitizeMessage(message);
-    if (!sanitized) return;
-
-    try {
-      // Save private message to database
-      const messageData: any = {
-        text: sanitized,
-        sender: user.email,
-        thread: toEmail // Use recipient email as thread for private messages
-      };
-
-      // Add file data if present
-      if (file) {
-        messageData.file = file;
-      }
-
-      const savedMessage = await MessageService.createMessage(messageData);
-
-      const privateMsg: any = {
-        id: (savedMessage._id as string).toString(),
-        from: user.email,
-        to: toEmail,  
-        message: sanitized,
-        timestamp: savedMessage.createdAt.getTime()
-      };
-
-      // Add file data if present
-      if (savedMessage.file) {
-        privateMsg.file = savedMessage.file;
-      }
-
-      io.to(targetSocketId).emit("private message", privateMsg);
-      socket.emit("private message", privateMsg);
-      user.lastSeen = Date.now();
-    } catch (error) {
-      console.error("Error saving private message:", error);
-      socket.emit("error", "Failed to send private message");
-    }
-    user.lastSeen = Date.now();
-  });
-
   // Handle typing indicators
   socket.on("typing", ({ isTyping, thread }) => {
     broadcastTypingStatus(socket.id, isTyping, thread);
   });
 
-  socket.on("edit message", async ({ messageId, newText, isPrivate }) => {
+  socket.on("edit message", async ({ messageId, newText }) => {
     try {
       const user = users.get(socket.id);
       if (!user) {
@@ -608,7 +549,6 @@ io.on("connection", async (socket: Socket) => {
       const sanitizedText = sanitizeMessage(newText);
       console.log(`Attempting to edit message ${messageId} by user ${user.email}`);
       
-      // Update message in database
       const updatedMessage = await MessageService.updateMessage(messageId, sanitizedText, user.email);
       
       if (!updatedMessage) {
@@ -617,26 +557,24 @@ io.on("connection", async (socket: Socket) => {
         return;
       }
 
-      // Create message object for frontend
       const editedMsgForFrontend = {
         id: (updatedMessage._id as string).toString(),
         text: updatedMessage.text,
         sender: updatedMessage.sender,
         timestamp: updatedMessage.createdAt,
         edited: true,
-        reactions: Object.fromEntries(updatedMessage.reactions || new Map())
+        reactions: Object.fromEntries(updatedMessage.reactions || new Map()),
+        thread: updatedMessage.thread
       };
 
-      if (isPrivate) {
-        // For private messages, send to both sender and recipient
+      if (updatedMessage.thread === 'public') {
+        io.emit("message edited", editedMsgForFrontend);
+      } else {
         const recipientSocketId = emailToSocketId.get(updatedMessage.thread);
         if (recipientSocketId) {
           io.to(recipientSocketId).emit("message edited", editedMsgForFrontend);
         }
         socket.emit("message edited", editedMsgForFrontend);
-      } else {
-        // For public messages, broadcast to all
-        io.emit("message edited", editedMsgForFrontend);
       }
     } catch (error) {
       console.error('Error editing message:', error);
@@ -645,7 +583,7 @@ io.on("connection", async (socket: Socket) => {
   });
 
   // Handle message deletion
-  socket.on("delete message", async (messageId: string) => {
+  socket.on("delete message", async ({messageId, threadId}) => {
     try {
       const user = users.get(socket.id);
       if (!user) {
@@ -655,7 +593,6 @@ io.on("connection", async (socket: Socket) => {
 
       console.log(`Attempting to delete message ${messageId} by user ${user.email}`);
 
-      // Delete message from database
       const wasDeleted = await MessageService.deleteMessage(messageId, user.email);
       
       if (!wasDeleted) {
@@ -664,10 +601,17 @@ io.on("connection", async (socket: Socket) => {
         return;
       }
 
-      // Broadcast deletion to all connected users
-      // For both public and private messages, we broadcast to everyone
-      // The frontend will filter based on which messages they can see
-      io.emit("message deleted", messageId);
+      if (threadId === 'public') {
+        io.emit("message deleted", {messageId, threadId});
+      }
+      else {
+        const recipientSocketId = emailToSocketId.get(threadId);
+        if (recipientSocketId) {
+          io.to(recipientSocketId).emit("message deleted", {messageId, threadId});
+        }
+        socket.emit("message deleted", {messageId, threadId});
+      }
+
     } catch (error) {
       console.error('Error deleting message:', error);
       socket.emit("error", "Failed to delete message");
@@ -683,9 +627,9 @@ io.on("connection", async (socket: Socket) => {
   });
 
   // Handle message reactions
-  socket.on("toggle reaction", async ({ messageId, emoji, userId, isPrivate }) => {
+  socket.on("toggle reaction", async ({ messageId, emoji, userId }) => {
     try {
-      console.log(`Reaction received - MessageId: ${messageId}, Emoji: ${emoji}, UserId: ${userId}, IsPrivate: ${isPrivate}`);
+      console.log(`Reaction received - MessageId: ${messageId}, Emoji: ${emoji}, UserId: ${userId}`);
       
       const user = users.get(socket.id);
       if (!user || user.id !== userId) {
@@ -694,7 +638,6 @@ io.on("connection", async (socket: Socket) => {
         return;
       }
 
-      // Check if user is trying to react to their own message
       const existingMessage = await MessageService.findMessageById(messageId);
       if (!existingMessage) {
         console.log(`Message not found for reaction: ${messageId}`);
@@ -702,10 +645,8 @@ io.on("connection", async (socket: Socket) => {
         return;
       }
 
-      // Get user email for reaction (using email instead of userId for consistency)
       const userEmail = user.email;
 
-      // Toggle reaction (add if not present, remove if present)
       const updatedMessage = await MessageService.toggleReaction(messageId, emoji, userEmail);
 
       if (!updatedMessage) {
@@ -713,25 +654,24 @@ io.on("connection", async (socket: Socket) => {
         return;
       }
 
-      // Create reaction update object for frontend
       const reactionUpdate = { 
         messageId, 
-        reactions: Object.fromEntries(updatedMessage.reactions || new Map())
+        reactions: Object.fromEntries(updatedMessage.reactions || new Map()),
+        threadId: updatedMessage.thread
       };
 
-      if (isPrivate) {
-        // For private messages, send to both users in the conversation
-        const recipientEmail = updatedMessage.thread; // thread contains recipient email for private messages
+      if (updatedMessage.thread === 'public') {
+        io.emit("reaction updated", reactionUpdate);
+      } else {
+        const recipientEmail = updatedMessage.thread;
+        const senderEmail = user.email;
         const recipientSocketId = emailToSocketId.get(recipientEmail);
         
-        socket.emit("reaction updated", reactionUpdate);
+        socket.emit("reaction updated", { ...reactionUpdate, threadId: recipientEmail });
+
         if (recipientSocketId) {
-          io.to(recipientSocketId).emit("reaction updated", reactionUpdate);
+          io.to(recipientSocketId).emit("reaction updated", { ...reactionUpdate, threadId: senderEmail });
         }
-      } else {
-        // For public messages, broadcast to all users
-        console.log(`Broadcasting reaction update:`, reactionUpdate);
-        io.emit("reaction updated", reactionUpdate);
       }
     } catch (error) {
       console.error('Error handling reaction:', error);
